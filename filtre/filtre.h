@@ -3,9 +3,7 @@
 #include <math.h>
 #include <string.h>
 
-typedef struct
-{
-} filtre_t;
+typedef struct filtre_t filtre_t;
 
 filtre_t *filtre_creer(float freq_coupure, int taux);
 

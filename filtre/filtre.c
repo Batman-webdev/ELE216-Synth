@@ -7,13 +7,13 @@
 
 #define M_PI 3.14159265358979323846
 
-typedef struct
+struct filtre_t
 {
     float frequence_coupure;
     int taux_echantillonnage;
     float coefficent;
     float etat_interne;
-} filtre_t;
+};
 
 filtre_t *filtre_creer(float freq_coupure, int taux)
 {
