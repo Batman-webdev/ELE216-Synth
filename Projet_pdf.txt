@@ -1,0 +1,191 @@
+Projet de session — Synthétiseur MS-1
+Ce projet est réalisé en équipe de 4 personnes, en deux phases.
+
+Phase 1 (3 semaines) : chaque membre développe un module individuel avec type
+opaque, tests unitaires Unity, documentation Doxygen et Makefile. L’intégration des
+modules produit un synthétiseur fonctionnel mono-thread.
+
+Phase 2 (3 semaines) : l’équipe ajoute le contrôle à distance par socket, puis prépare une
+courte démonstration au dernier laboratoire.
+
+Description
+L’application simule un synthétiseur analogique soustractif. Le signal est généré par un
+oscillateur, mis en forme par un filtre passe-bas, puis modulé en amplitude par une
+enveloppe ADSR. L’interface SDL reproduit le panneau de contrôle du MS-1 (voir
+maquette au début de cette page) avec un clavier piano de deux octaves, un sélecteur de
+forme d’onde, des curseurs ADSR et un potentiomètre de coupure du filtre. La lecture
+audio se fait via SDL.
+
+Chaîne de signal : Oscillateur → Filtre passe-bas → Enveloppe ADSR → Sortie audio /
+WAV
+
+Architecture
+Le projet est découpé en quatre modules. Les modules A, B et C sont des modules de
+traitement de signal indépendants qui opèrent sur des tampons de float. Le module D les
+intègre dans l’interface graphique.
+- Module A (oscillateur) : génération de formes d’onde (panneau OSCILLATOR)
+- Module B (filtre passe-bas) : filtrage fréquentiel + export WAV (panneau FILTER)
+- Module C (enveloppe ADSR) : mise en forme de l’amplitude (panneau ENVELOPE)
+- Module D (interface SDL) : panneau de contrôle, clavier, lecture audio
+A, B et C sont indépendants. D dépend des trois mais peut-être développé en parallèle.
+Phase 1 : Modules individuels
+
+Module A — Oscillateur (Personne 1)
+Ce module génère des échantillons audio pour quatre formes d’onde.
+Formes d’onde : SINE (sinus), SQUARE (carrée), TRI (triangle), SAW (dent de scie).
+Type opaque : oscillateur_t encapsulant le type d’onde, la fréquence (Hz),
+l’amplitude (0.0 à 1.0), le taux d’échantillonnage et la phase accumulée.
+Enum : ONDE_SINE, ONDE_SQUARE, ONDE_TRI, ONDE_SAW
+Interface :
+oscillateur_t *oscillateur_creer(onde_type_t type, float
+frequence, float amplitude, int taux);
+Alloue et initialise.
+void oscillateur_detruire(oscillateur_t *o);
+Libère la mémoire.
+void oscillateur_generer(oscillateur_t *o, float *buffer, int
+nb_echantillons);
+Remplit le tampon. La phase s’accumule entre les appels pour assurer la continuité.
+void oscillateur_set_frequence(oscillateur_t *o, float freq);
+Modifie la fréquence.
+void oscillateur_set_type(oscillateur_t *o, onde_type_t type);
+Change la forme d’onde.
+void oscillateur_reset_phase(oscillateur_t *o);
+Remet la phase à zéro.
+float oscillateur_frequence(const oscillateur_t *o);
+onde_type_t oscillateur_type(const oscillateur_t *o);
+Accesseurs.
+Tests unitaires :
+- SINE à 440 Hz, taux 44100 : la période est d’environ 100 échantillons
+- SQUARE : les échantillons alternent entre +amplitude et −amplitude
+- Amplitude 0.0 : buffer rempli de zéros
+- Tous les échantillons sont dans [−amplitude, +amplitude]
+- Deux appels successifs produisent un signal continu (pas de discontinuité)
+
+Module B — Filtre passe-bas (Personne 2)
+Ce module applique un filtre passe-bas au signal audio. Il correspond au panneau FILTER
+du synthé, contrôlé par le potentiomètre CUTOFF.
+Principe : un filtre passe-bas laisse passer les fréquences inférieures à la fréquence de
+coupure et atténue les fréquences supérieures. Il adoucit le son — un carré filtré se
+rapproche progressivement d’un sinus. Utilisez Wikipédia et l’IA pour comprendre et
+implémenter le filtre.
+Type opaque : filtre_t encapsulant la fréquence de coupure, le taux
+d’échantillonnage, le coefficient α et l’état interne du filtre (y[n−1]).
+Interface :
+filtre_t *filtre_creer(float freq_coupure, int taux);
+Alloue et calcule le coefficient α.
+void filtre_detruire(filtre_t *f);
+Libère la mémoire.
+void filtre_appliquer(filtre_t *f, float *buffer, int
+nb_echantillons);
+Applique le filtre en place sur le tampon. L’état interne est conservé entre les
+appels.
+void filtre_set_coupure(filtre_t *f, float freq_coupure);
+Modifie la fréquence de coupure et recalcule α.
+void filtre_reset(filtre_t *f);
+Remet l’état interne à zéro (début d’une nouvelle note).
+float filtre_coupure(const filtre_t *f);
+Accesseur
+Tests unitaires :
+- Un signal constant n’est pas modifié par le filtre
+- Coupure très basse (ex : 20 Hz) sur un signal carré : le signal de sortie a une amplitude
+réduite
+- Coupure très haute (ex : 20000 Hz) : le signal est presque inchangé
+- Coupure = 0 : le signal de sortie est nul (ou presque)
+- WAV export : taille du fichier = 44 + nb_echantillons × 2
+- WAV export : les 4 premiers octets sont ’RIFF’
+
+Module C — Enveloppe ADSR (Personne 3)
+Ce module modèlise l’évolution de l’amplitude d’une note dans le temps.
+Paramètres ADSR :
+A (Attack) : temps de montée de 0 à l’amplitude maximale. Valeur par défaut : 8 ms.
+D (Decay) : temps de descente de l’amplitude maximale au niveau Sustain. Valeur par
+défaut : 120 ms.
+S (Sustain) : niveau maintenu tant que la note est tenue. Valeur par défaut : 70 %.
+R (Release) : temps de descente du niveau Sustain à zéro après relâchement de la note.
+Valeur par défaut : 240 ms.
+Type opaque : enveloppe_t encapsulant les quatre paramètres et le taux
+d’échantillonnage.
+Interface :
+enveloppe_t *enveloppe_creer(float attack_s, float decay_s, float
+sustain, float release_s, int taux);
+Alloue et initialise. attack, decay, release en secondes ; sustain entre 0.0 et 1.0.
+void enveloppe_detruire(enveloppe_t *e);
+Libère la mémoire.
+void enveloppe_appliquer(const enveloppe_t *e, float *buffer, int
+nb_echantillons, float duree_note);
+Multiplie chaque échantillon par le facteur d’enveloppe. La durée de la note
+détermine la phase sustain.
+int enveloppe_duree_totale(const enveloppe_t *e, float
+duree_note);
+Retourne le nombre total d’échantillons (attack + decay + sustain + release).
+void enveloppe_set_attack(enveloppe_t *e, float s);
+void enveloppe_set_decay(enveloppe_t *e, float s);
+void enveloppe_set_sustain(enveloppe_t *e, float niveau);
+void enveloppe_set_release(enveloppe_t *e, float s);
+Mutateurs.
+float enveloppe_attack(const enveloppe_t *e);
+float enveloppe_sustain(const enveloppe_t *e);
+Accesseurs.
+Tests unitaires :
+- Premier échantillon après application : proche de 0 (début de l’attack)
+- Pendant le sustain : amplitude ≈ niveau sustain
+- Dernier échantillon du release : proche de 0
+- Attack = 0, decay = 0, sustain = 1.0, release = 0 : le buffer n’est pas modifié
+- Tous les facteurs d’enveloppe sont entre 0.0 et 1.0
+
+Module D — Interface SDL (Personne 4)
+Ce module reproduit le panneau de contrôle du synthétiseur. Il gère l’affichage, la souris et
+la lecture audio via la bibliothèque SDL.
+Type opaque : interface_t encapsulant la fenêtre SDL, le dispositif audio et les
+références vers les modules A, B, C.
+Interface :
+interface_t *interface_creer(oscillateur_t *osc, filtre_t *flt,
+enveloppe_t *env);
+Initialise SDL (vidéo et audio), crée la fenêtre, dessine le panneau initial.
+void interface_detruire(interface_t *ui);
+Libère les ressources SDL.
+void interface_boucle(interface_t *ui);
+Boucle d’événements principale.
+Interactions :
+- Clic sur une icône d’oscillateur : change la forme d’onde, met à jour la surbrillance
+- Glisser un curseur ADSR : modifie le paramètre correspondant de l’enveloppe, affiche la
+nouvelle valeur
+- Glisser/cliquer le potentiomètre CUTOFF : modifie la fréquence de coupure du filtre
+- Clic sur une touche du piano : génère la note (oscillateur → filtre → enveloppe → buffer),
+joue via SDL_QueueAudio
+Intégration Phase 1
+
+Le main.c :
+Crée un oscillateur (SINE, 440 Hz, amplitude 0.8, taux 44100)
+Crée un filtre passe-bas (coupure 2000 Hz)
+Crée une enveloppe ADSR (A = 0.008, D = 0.120, S = 0.7, R = 0.240)
+Crée l’interface SDL et lance la boucle
+À la sortie, libère toutes les ressources
+Livrables Phase 1
+Code source complet avec Makefiles
+Tests unitaires Unity pour les 4 modules
+Documentation Doxygen de tous les fichiers .h
+Application fonctionnelle : interface similaire à l’exemple, clic sur le piano joue une note,
+les contrôles modifient le son en temps réel
+Phase 2 : Contrôle à distance et partition
+Une application de contrôle lit un fichier partition contenant une séquence de notes et les
+envoie par socket au synthétiseur.
+Format du fichier partition :
+# note duree_ms
+C3 500
+D3 500
+E3 250
+F3 250
+G3 1000
+REST 250
+A3 500
+C4 1000
+REST représente un silence. Les notes sont jouées séquentiellement. Les notes se
+comportent comme si elle avaient été jouées au clavier.
+Livrables :
+Lecture d’un fichier partition par l’appli de contrôle et génération du son par le synthé.
+Au moins trois fichiers partitions de démonstration.
+
+Bonus
+- Polyphonie (jouer plusieurs notes en même temps).
+- Contrôle par MIDI.
