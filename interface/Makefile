@@ -6,7 +6,7 @@ LDLIBS  = -lm -lSDL2
 LDFLAGS =
 
 # Définition des liste de fichiers
-SRC = $(NAME).c interface.c SDL2\SDL2.c \enveloppe\enveloppe.c \filtre\filtre.c \oscillateur\oscillateur.c \Unity\unity.c
+SRC = $(NAME).c interface.c SDL2\SDL2.c /enveloppe/enveloppe.c /filtre/filtre.c /oscillateur/oscillateur.c /Unity/unity.c
 OBJ = $(SRC:.c=.o)
 DEP = $(OBJ:.o=.d)
 
