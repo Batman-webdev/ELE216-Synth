@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include "interface.h"
-#include "oscillateur.h"
-#include "filtre.h"
-#include "enveloppe.h"
+#include "../oscillateur/oscillateur.h"
+#include "../filtre/filtre.h"
+#include "../enveloppe/enveloppe.h"
 
 int main(void)
 {
