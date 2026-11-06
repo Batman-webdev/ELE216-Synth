@@ -103,29 +103,34 @@ défaut : 120 ms.
 S (Sustain) : niveau maintenu tant que la note est tenue. Valeur par défaut : 70 %.
 R (Release) : temps de descente du niveau Sustain à zéro après relâchement de la note.
 Valeur par défaut : 240 ms.
+
 Type opaque : enveloppe_t encapsulant les quatre paramètres et le taux
 d’échantillonnage.
+
 Interface :
-enveloppe_t *enveloppe_creer(float attack_s, float decay_s, float
-sustain, float release_s, int taux);
+enveloppe_t *enveloppe_creer(float attack_s, float decay_s, float sustain, float release_s, int taux);
 Alloue et initialise. attack, decay, release en secondes ; sustain entre 0.0 et 1.0.
+
 void enveloppe_detruire(enveloppe_t *e);
 Libère la mémoire.
-void enveloppe_appliquer(const enveloppe_t *e, float *buffer, int
-nb_echantillons, float duree_note);
+
+void enveloppe_appliquer(const enveloppe_t *e, float *buffer, int nb_echantillons, float duree_note);
 Multiplie chaque échantillon par le facteur d’enveloppe. La durée de la note
 détermine la phase sustain.
-int enveloppe_duree_totale(const enveloppe_t *e, float
-duree_note);
+
+int enveloppe_duree_totale(const enveloppe_t *e, float duree_note);
 Retourne le nombre total d’échantillons (attack + decay + sustain + release).
+
 void enveloppe_set_attack(enveloppe_t *e, float s);
 void enveloppe_set_decay(enveloppe_t *e, float s);
 void enveloppe_set_sustain(enveloppe_t *e, float niveau);
 void enveloppe_set_release(enveloppe_t *e, float s);
 Mutateurs.
+
 float enveloppe_attack(const enveloppe_t *e);
 float enveloppe_sustain(const enveloppe_t *e);
 Accesseurs.
+
 Tests unitaires :
 - Premier échantillon après application : proche de 0 (début de l’attack)
 - Pendant le sustain : amplitude ≈ niveau sustain

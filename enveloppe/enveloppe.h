@@ -1,9 +1,5 @@
-#ifndef ENVELOPPE_H
-#define ENVELOPPE_H
+#pragma once
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 typedef struct enveloppe enveloppe_t;
 
@@ -22,9 +18,3 @@ float enveloppe_attack(const enveloppe_t *e);
 float enveloppe_decay(const enveloppe_t *e);
 float enveloppe_sustain(const enveloppe_t *e);
 float enveloppe_release(const enveloppe_t *e);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif /* ENVELOPPE_H */
