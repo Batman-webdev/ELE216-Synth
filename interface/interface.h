@@ -1,6 +1,10 @@
 #ifndef INTERFACE_H
 #define INTERFACE_H
 
+#include "../oscillateur/oscillateur.h"
+#include "../filtre/filtre.h"
+#include "../enveloppe/enveloppe.h"
+
 typedef struct interface interface_t;
 
 /**

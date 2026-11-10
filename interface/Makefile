@@ -1,4 +1,4 @@
-NAME    = test_interface
+NAME    = demo_interface
 CC      = gcc
 CFLAGS  = -Wall -Wextra -std=c11 -g
 INCLUDES = -I ../Unity/unity -I/usr/include/SDL2 -D_REENTRANT
@@ -6,7 +6,7 @@ LDLIBS  = -lm -lSDL2
 LDFLAGS =
 
 # Définition des liste de fichiers
-SRC = $(NAME).c interface.c SDL2\SDL2.c /enveloppe/enveloppe.c /filtre/filtre.c /oscillateur/oscillateur.c /Unity/unity.c
+SRC = $(NAME).c interface.c ../enveloppe/enveloppe.c ../filtre/filtre.c ../oscillateur/oscillateur.c 
 OBJ = $(SRC:.c=.o)
 DEP = $(OBJ:.o=.d)
 

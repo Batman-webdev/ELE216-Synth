@@ -44,8 +44,12 @@ struct interface
     enveloppe_t *env;
 };
 
+static void piano_dessiner(SDL_Renderer *rendu);
+static int piano_note_clique(int x, int y);
+static void piano_jouer_test(interface_t *ui, int note_midi);
+
 interface_t *interface_creer(oscillateur_t *osc, filtre_t *flt, enveloppe_t *env){
-    if(osc || flt || env == NULL) return NULL;
+    if(osc == NULL || flt == NULL || env == NULL) return NULL;
 
     interface_t *ui = malloc(sizeof(interface_t));
     if(ui == NULL) return NULL;
@@ -92,7 +96,7 @@ interface_t *interface_creer(oscillateur_t *osc, filtre_t *flt, enveloppe_t *env
 
     ui->audio = SDL_OpenAudioDevice(NULL, 0, &spec, NULL, 0);
     if(ui->audio == 0){
-        interface_detruire(ui)
+        interface_detruire(ui);
         return NULL;
     }
 
@@ -112,6 +116,9 @@ void interface_detruire(interface_t *ui){
 
 
 void interface_boucle(interface_t *ui){
+
+    if (ui == NULL || ui->rendu == NULL) return;
+
     bool continuer = true;
 
     SDL_Rect zone_oscillateur   = {50, 50, 200, 100};
@@ -147,14 +154,14 @@ void interface_boucle(interface_t *ui){
                 int x = evenement.button.x;
                 int y = evenement.button.y;
 
-                SDL_Point souris(x,y);
+                SDL_Point souris = {x,y};
 
                 if(SDL_PointInRect(&souris, &zone_oscillateur)) printf("Oscillateur appuye\n");
                 if(SDL_PointInRect(&souris, &zone_filtre)) printf("Filtre appuye\n");
                 if(SDL_PointInRect(&souris, &zone_adsr)) printf("ASDR appuye\n");
 
                 int note = piano_note_clique(x,y);
-                if(note !=1) {
+                if(note != -1) {
                     printf("Note MIDI jouee : %d\n", note);
                     piano_jouer_test(ui, note);
                 }
@@ -166,8 +173,8 @@ void interface_boucle(interface_t *ui){
                 printf("Bouton relache a (%d, %d)\n", x, y);
             }
             else if(evenement.type == SDL_MOUSEMOTION){
-                int x = evenement.button.x;
-                int y = evenement.button.y;
+                int x = evenement.motion.x;
+                int y = evenement.motion.y;
                 printf("Souris en mouvement : (%d, %d)\n", x, y);
 
             }
