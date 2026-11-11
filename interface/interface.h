@@ -4,6 +4,10 @@
 #include "../oscillateur/oscillateur.h"
 #include "../filtre/filtre.h"
 #include "../enveloppe/enveloppe.h"
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_audio.h>
+#include <SDL2/SDL_video.h>
+#include <SDL2/SDL_ttf.h>
 
 typedef struct interface interface_t;
 

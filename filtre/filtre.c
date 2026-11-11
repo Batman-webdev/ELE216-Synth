@@ -24,6 +24,9 @@ filtre_t *filtre_creer(float freq_coupure, int taux)
     float tau = 1.0f / (2.0f * (float)M_PI * freq_coupure);
     float dt = 1.0f / taux;
 
+    f->frequence_coupure = freq_coupure;
+    f->taux_echantillonnage = taux;
+    f->etat_interne = 0.0f;
     f->coefficent = dt / (tau + dt);
     return f;
 }
