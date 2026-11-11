@@ -1,8 +1,8 @@
 NAME    = main
 CC      = gcc
 CFLAGS  = -Wall -Wextra -std=c11 -g
-INCLUDES = -I ../Unity/unity -I/usr/include/SDL2 -D_REENTRANT
-LDLIBS  = -lm -lSDL2
+INCLUDES = -I ../Unity/unity $(shell pkg-config --cflags sdl2 SDL2_ttf)
+LDLIBS  = -lm $(shell pkg-config --libs sdl2 SDL2_ttf)
 LDFLAGS =
 
 # Définition des liste de fichiers
@@ -15,7 +15,7 @@ DEP = $(OBJ:.o=.d)
 all: $(NAME)
 
 $(NAME): $(OBJ)
-	$(CC) $(LDFLAGS) $^ ../Unity/unity.c -o $@ $(LDLIBS)
+	$(CC) $(LDFLAGS) $^ -o $@ $(LDLIBS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
