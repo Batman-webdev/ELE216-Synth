@@ -121,9 +121,12 @@ void interface_boucle(interface_t *ui){
 
     bool continuer = true;
 
-    SDL_Rect zone_oscillateur   = {50, 50, 200, 100};
-    SDL_Rect zone_filtre        = {300, 50, 200, 100};
-    SDL_Rect zone_adsr          = {550, 50, 350, 100};
+    SDL_Rect zone_oscillateur   = {50, 50, 300, 200};
+    SDL_Rect zone_adsr          = {400, 50, 250, 200};
+    SDL_Rect zone_filtre        = {700, 50, 200, 200};
+
+    SDL_Rect zone_sine          = {70, 80, 60, 60};
+    SDL_Rect zone_sine          = {70, 80, 60, 60};
 
     // FENETRE
     SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
@@ -132,6 +135,9 @@ void interface_boucle(interface_t *ui){
     // Zone Oscillateur
     SDL_SetRenderDrawColor(ui->rendu, 60, 130, 220, 255);
     SDL_RenderFillRect(ui->rendu, &zone_oscillateur);
+
+    SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
+    SDL_RenderFillRect(ui->rendu, &zone_sine);
 
     // Zone Filtre
     SDL_SetRenderDrawColor(ui->rendu, 60, 180, 120, 255);
@@ -156,7 +162,9 @@ void interface_boucle(interface_t *ui){
 
                 SDL_Point souris = {x,y};
 
-                if(SDL_PointInRect(&souris, &zone_oscillateur)) printf("Oscillateur appuye\n");
+                if(SDL_PointInRect(&souris, &zone_oscillateur)){
+                    printf("Oscillateur appuye\n");
+                }
                 if(SDL_PointInRect(&souris, &zone_filtre)) printf("Filtre appuye\n");
                 if(SDL_PointInRect(&souris, &zone_adsr)) printf("ASDR appuye\n");
 
