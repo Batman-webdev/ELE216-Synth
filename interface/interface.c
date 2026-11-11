@@ -7,6 +7,9 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_audio.h>
 #include <SDL2/SDL_video.h>
+#include "../oscillateur/oscillateur.h"
+#include "../filtre/filtre.h"
+#include "../enveloppe/enveloppe.h"
 
 #define PIANO_X 50
 #define PIANO_Y 350
@@ -47,6 +50,10 @@ struct interface
 static void piano_dessiner(SDL_Renderer *rendu);
 static int piano_note_clique(int x, int y);
 static void piano_jouer_test(interface_t *ui, int note_midi);
+static void dessiner_icone_sinus(SDL_Renderer *rendu, SDL_Rect zone);
+static void dessiner_icone_square(SDL_Renderer *rendu, SDL_Rect zone);
+static void dessiner_icone_triangle(SDL_Renderer *rendu, SDL_Rect zone);
+static void dessiner_icone_saw(SDL_Renderer *rendu, SDL_Rect zone);
 
 interface_t *interface_creer(oscillateur_t *osc, filtre_t *flt, enveloppe_t *env){
     if(osc == NULL || flt == NULL || env == NULL) return NULL;
@@ -123,10 +130,17 @@ void interface_boucle(interface_t *ui){
 
     SDL_Rect zone_oscillateur   = {50, 50, 300, 200};
     SDL_Rect zone_adsr          = {400, 50, 250, 200};
-    SDL_Rect zone_filtre        = {700, 50, 200, 200};
+    SDL_Rect zone_filtre        = {700, 50, 250, 200};
 
     SDL_Rect zone_sine          = {70, 80, 60, 60};
-    SDL_Rect zone_sine          = {70, 80, 60, 60};
+    SDL_Rect zone_square        = {140, 80, 60, 60};
+    SDL_Rect zone_tri           = {210, 80, 60, 60};
+    SDL_Rect zone_saw           = {280, 80, 60, 60};
+
+    SDL_Rect icone_sine          = {80, 90, 40, 40};
+    SDL_Rect icone_square        = {150, 90, 40, 40};
+    SDL_Rect icone_tri           = {220, 90, 40, 40};
+    SDL_Rect icone_saw           = {290, 90, 40, 40};
 
     // FENETRE
     SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
@@ -138,12 +152,33 @@ void interface_boucle(interface_t *ui){
 
     SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
     SDL_RenderFillRect(ui->rendu, &zone_sine);
+    SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
+    SDL_RenderFillRect(ui->rendu, &icone_sine);
+    dessiner_icone_sinus(ui->rendu, icone_sine);
+
+    SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
+    SDL_RenderFillRect(ui->rendu, &zone_square);
+    SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
+    SDL_RenderFillRect(ui->rendu, &icone_square);
+    dessiner_icone_square(ui->rendu, icone_square);
+
+    SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
+    SDL_RenderFillRect(ui->rendu, &zone_tri);
+    SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
+    SDL_RenderFillRect(ui->rendu, &icone_tri);
+    dessiner_icone_triangle(ui->rendu, icone_tri);
+
+    SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
+    SDL_RenderFillRect(ui->rendu, &zone_saw);
+    SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
+    SDL_RenderFillRect(ui->rendu, &icone_saw);
+    dessiner_icone_saw(ui->rendu, icone_saw);
 
     // Zone Filtre
     SDL_SetRenderDrawColor(ui->rendu, 60, 180, 120, 255);
     SDL_RenderFillRect(ui->rendu, &zone_filtre);
 
-    // Zone Oscillateur
+    // Zone ASDR
     SDL_SetRenderDrawColor(ui->rendu, 180, 100, 200, 255);
     SDL_RenderFillRect(ui->rendu, &zone_adsr);
 
@@ -163,10 +198,29 @@ void interface_boucle(interface_t *ui){
                 SDL_Point souris = {x,y};
 
                 if(SDL_PointInRect(&souris, &zone_oscillateur)){
-                    printf("Oscillateur appuye\n");
+                    //printf("Oscillateur appuye\n");
+                    if(SDL_PointInRect(&souris, &zone_sine)){
+                        printf("Sine appuye\n");
+                        oscillateur_set_type(ui->osc, ONDE_SINE);
+                    }
+                    if(SDL_PointInRect(&souris, &zone_square)){
+                        printf("Square appuye\n");
+                        oscillateur_set_type(ui->osc, ONDE_SQUARE);
+                    }
+                    if(SDL_PointInRect(&souris, &zone_tri)){
+                        printf("Tri appuye\n");
+                        oscillateur_set_type(ui->osc, ONDE_TRI);
+                    }
+                    if(SDL_PointInRect(&souris, &zone_saw)){
+                        printf("SAW appuye\n");
+                        oscillateur_set_type(ui->osc, ONDE_SAW);
+                    }
                 }
                 if(SDL_PointInRect(&souris, &zone_filtre)) printf("Filtre appuye\n");
-                if(SDL_PointInRect(&souris, &zone_adsr)) printf("ASDR appuye\n");
+                if(SDL_PointInRect(&souris, &zone_adsr)){
+                    printf("ASDR appuye\n");
+
+                }
 
                 int note = piano_note_clique(x,y);
                 if(note != -1) {
@@ -313,4 +367,96 @@ static void piano_jouer_test(interface_t *ui, int note_midi)
     SDL_PauseAudioDevice(ui->audio, 0);
 
     free(buffer);
+}
+
+
+static void dessiner_icone_sinus(SDL_Renderer *rendu, SDL_Rect zone)
+{
+    SDL_SetRenderDrawColor(rendu, 255, 255, 255, 255);
+
+    int centre_y = zone.y + zone.h / 2;
+    int amplitude = zone.h / 3;
+
+    for (int x = 0; x < zone.w - 1; x++)
+    {
+        float angle1 = 2.0f * 3.14159f * x / zone.w;
+        float angle2 = 2.0f * 3.14159f * (x + 1) / zone.w;
+
+        int y1 = centre_y - (int)(amplitude * sinf(angle1));
+        int y2 = centre_y - (int)(amplitude * sinf(angle2));
+
+        SDL_RenderDrawLine(rendu,
+                           zone.x + x, y1,
+                           zone.x + x + 1, y2);
+    }
+}
+
+
+static void dessiner_icone_square(SDL_Renderer *rendu, SDL_Rect zone)
+{
+    SDL_SetRenderDrawColor(rendu, 255, 255, 255, 255);
+
+    //int milieu = zone.y + zone.h / 2;
+    int haut = zone.y + 5;
+    int bas = zone.y + zone.h - 5;
+
+    int x1 = zone.x;
+    int x2 = zone.x + zone.w / 4;
+    int x3 = zone.x + zone.w / 2;
+    int x4 = zone.x + 3 * zone.w / 4;
+    int x5 = zone.x + zone.w;
+
+    SDL_RenderDrawLine(rendu, x1, bas, x1, haut);
+    SDL_RenderDrawLine(rendu, x1, haut, x2, haut);
+    SDL_RenderDrawLine(rendu, x2, haut, x2, bas);
+    SDL_RenderDrawLine(rendu, x2, bas, x3, bas);
+    SDL_RenderDrawLine(rendu, x3, bas, x3, haut);
+    SDL_RenderDrawLine(rendu, x3, haut, x4, haut);
+    SDL_RenderDrawLine(rendu, x4, haut, x4, bas);
+    SDL_RenderDrawLine(rendu, x4, bas, x5, bas);
+}
+
+
+static void dessiner_icone_triangle(SDL_Renderer *rendu, SDL_Rect zone)
+{
+    SDL_SetRenderDrawColor(rendu, 255, 255, 255, 255);
+
+    int milieu = zone.y + zone.h / 2;
+    int haut = zone.y + 5;
+    int bas = zone.y + zone.h - 5;
+
+    int largeur = zone.w / 2;
+
+    SDL_RenderDrawLine(rendu,
+                       zone.x, milieu,
+                       zone.x + largeur / 2, haut);
+
+    SDL_RenderDrawLine(rendu,
+                       zone.x + largeur / 2, haut,
+                       zone.x + largeur, milieu);
+
+    SDL_RenderDrawLine(rendu,
+                       zone.x + largeur, milieu,
+                       zone.x + 3 * largeur / 2, bas);
+
+    SDL_RenderDrawLine(rendu,
+                       zone.x + 3 * largeur / 2, bas,
+                       zone.x + 2 * largeur, milieu);
+}
+
+
+static void dessiner_icone_saw(SDL_Renderer *rendu, SDL_Rect zone)
+{
+    SDL_SetRenderDrawColor(rendu, 255, 255, 255, 255);
+
+    int haut = zone.y + 5;
+    int bas = zone.y + zone.h - 5;
+
+    int x1 = zone.x;
+    int x2 = zone.x + zone.w / 2;
+    int x3 = zone.x + zone.w;
+
+    SDL_RenderDrawLine(rendu, x1, bas, x2, haut);
+    SDL_RenderDrawLine(rendu, x2, haut, x2, bas);
+    SDL_RenderDrawLine(rendu, x2, bas, x3, haut);
 }
