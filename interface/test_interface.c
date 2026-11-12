@@ -13,7 +13,7 @@ void setUp(void)
 {
     int taux = 44100;
 
-    osc = oscillateur_creer(ONDE_SINUS, 440.0f, 0.5f, taux);
+    osc = oscillateur_creer(ONDE_SINE, 440.0f, 0.5f, taux);
     flt = filtre_creer(2000.0f, taux);
     env = enveloppe_creer(0.01f, 0.1f, 0.7f, 0.2f, taux);
 }
