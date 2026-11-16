@@ -158,7 +158,7 @@ interface_t *interface_creer(oscillateur_t *osc, filtre_t *flt, enveloppe_t *env
     spec.freq = 44100;
     spec.format = AUDIO_F32SYS;
     spec.channels = 1;
-    spec.samples = 1024;
+    spec.samples = 256;
     spec.callback = NULL;
     spec.userdata = NULL;
 
@@ -286,7 +286,7 @@ void interface_boucle(interface_t *ui){
             else if(evenement.type == SDL_MOUSEMOTION){
                 int x = evenement.motion.x;
                 int y = evenement.motion.y;
-                printf("Souris en mouvement : (%d, %d)\n", x, y);
+                //printf("Souris en mouvement : (%d, %d)\n", x, y);
 
                 if(ui->slider_actif != -1){
                     float ratio = 1.0f - (float)(y - 70) / 150.0f;
