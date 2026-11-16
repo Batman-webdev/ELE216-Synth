@@ -41,12 +41,14 @@ void filtre_detruire(filtre_t *f)
 
 void filtre_appliquer(filtre_t *f, float *buffer, int nb_echantillons)
 {
-    float x = 0.0f;
-    f->etat_interne = 0.0f;
+    if (f == NULL || buffer == NULL || nb_echantillons <= 0) {
+        return;
+    }
 
+    float x = 0.0f;
     for (int i = 0; i < nb_echantillons; i++)
     {
-        x = (f->coefficent * buffer[i]) + (1 - f->coefficent) * f->etat_interne;
+        x = (f->coefficent * buffer[i]) + (1.0f - f->coefficent) * f->etat_interne;
         buffer[i] = x;
         f->etat_interne = x;
     }

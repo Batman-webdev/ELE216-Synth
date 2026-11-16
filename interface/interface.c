@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <math.h>
 #include <stdint.h>
+#include <string.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_audio.h>
 #include <SDL2/SDL_video.h>
@@ -17,6 +18,7 @@
 #define PIANO_LARGEUR 900
 #define PIANO_HAUTEUR 180
 #define NB_TOUCHES_BLANCHES 14
+#define MAX_VOIX 8
 
 #define M_PI 3.14159265358979323846
 
@@ -38,11 +40,23 @@ static const int position_noires[10] = {
     7, 8, 10, 11, 12
 };
 
+typedef struct {
+    bool active;
+    bool released;
+    int note_midi;
+    float frequence_hz;
+    float temps;
+    float temps_release;
+    float duree_note_s;
+    oscillateur_t *osc;
+} voix_t;
+
 struct interface
 {
     SDL_Window *fenetre;
     SDL_Renderer *rendu;
     SDL_AudioDeviceID audio;
+    SDL_AudioSpec audio_spec;
     bool etat_sdl;
 
     oscillateur_t *osc;
@@ -63,11 +77,20 @@ struct interface
 
     float frequence_coupure_hz;
     bool dial_actif;
+
+    float temp_voice_buffer[2048];
+    bool note_active[128];
+    voix_t voix[MAX_VOIX];
 };
 
-static void piano_dessiner(SDL_Renderer *rendu);
+static void audio_callback(void *userdata, Uint8 *stream, int len);
+static void piano_dessiner(interface_t *ui, SDL_Renderer *rendu);
 static int piano_note_clique(int x, int y);
+static int touche_note_clavier(SDL_Keycode touche);
 static void piano_jouer_test(interface_t *ui, int note_midi);
+static void piano_relacher_note(interface_t *ui, int note_midi);
+static void voice_ajouter_note(interface_t *ui, int note_midi);
+static voix_t *voice_disponible(interface_t *ui);
 static void dessiner_icone_sinus(SDL_Renderer *rendu, SDL_Rect zone);
 static void dessiner_icone_square(SDL_Renderer *rendu, SDL_Rect zone);
 static void dessiner_icone_triangle(SDL_Renderer *rendu, SDL_Rect zone);
@@ -94,6 +117,28 @@ interface_t *interface_creer(oscillateur_t *osc, filtre_t *flt, enveloppe_t *env
     ui->rendu = NULL;
     ui->audio = 0;
     ui->etat_sdl = false;
+
+    for (int i = 0; i < 128; ++i) {
+        ui->note_active[i] = false;
+    }
+
+    for (int i = 0; i < MAX_VOIX; ++i) {
+        ui->voix[i].active = false;
+        ui->voix[i].released = false;
+        ui->voix[i].note_midi = -1;
+        ui->voix[i].frequence_hz = 440.0f;
+        ui->voix[i].temps = 0.0f;
+        ui->voix[i].temps_release = 0.0f;
+        ui->voix[i].duree_note_s = 0.300f;
+        ui->voix[i].osc = oscillateur_creer(ONDE_SINE, 440.0f, 0.5f, 44100);
+        if (ui->voix[i].osc == NULL) {
+            for (int j = 0; j < i; ++j) {
+                oscillateur_detruire(ui->voix[j].osc);
+            }
+            free(ui);
+            return NULL;
+        }
+    }
 
     ui->osc = osc;
     ui->flt = flt;
@@ -158,15 +203,17 @@ interface_t *interface_creer(oscillateur_t *osc, filtre_t *flt, enveloppe_t *env
     spec.freq = 44100;
     spec.format = AUDIO_F32SYS;
     spec.channels = 1;
-    spec.samples = 256;
-    spec.callback = NULL;
-    spec.userdata = NULL;
+    spec.samples = 128;
+    spec.callback = audio_callback;
+    spec.userdata = ui;
 
-    ui->audio = SDL_OpenAudioDevice(NULL, 0, &spec, NULL, 0);
-    if(ui->audio == 0){
+    ui->audio = SDL_OpenAudioDevice(NULL, 0, &spec, &ui->audio_spec, 0);
+    if (ui->audio == 0) {
         interface_detruire(ui);
         return NULL;
     }
+
+    SDL_PauseAudioDevice(ui->audio, 0);
 
     return ui;
 
@@ -175,6 +222,11 @@ interface_t *interface_creer(oscillateur_t *osc, filtre_t *flt, enveloppe_t *env
 
 void interface_detruire(interface_t *ui){
     if(ui == NULL) return;
+    for (int i = 0; i < MAX_VOIX; ++i) {
+        if (ui->voix[i].osc != NULL) {
+            oscillateur_detruire(ui->voix[i].osc);
+        }
+    }
     if(ui->audio != 0) SDL_CloseAudioDevice(ui->audio);
     if(ui->rendu != NULL) SDL_DestroyRenderer(ui->rendu);
     if(ui->fenetre != NULL) SDL_DestroyWindow(ui->fenetre);
@@ -204,6 +256,8 @@ void interface_boucle(interface_t *ui){
     SDL_Rect icone_square        = {150, 110, 40, 40};
     SDL_Rect icone_tri           = {220, 110, 40, 40};
     SDL_Rect icone_saw           = {290, 110, 40, 40};
+
+    int note_clique_active = -1;
 
     while(continuer){
         SDL_Event evenement;
@@ -249,6 +303,7 @@ void interface_boucle(interface_t *ui){
                 int note = piano_note_clique(x,y);
                 if(note != -1) {
                     printf("Note MIDI jouee : %d\n", note);
+                    note_clique_active = note;
                     piano_jouer_test(ui, note);
                 }
 
@@ -279,12 +334,33 @@ void interface_boucle(interface_t *ui){
                 int y = evenement.button.y;
                 printf("Bouton relache a (%d, %d)\n", x, y);
 
+                if (note_clique_active != -1) {
+                    piano_relacher_note(ui, note_clique_active);
+                    note_clique_active = -1;
+                }
+
                 ui->slider_actif = -1;
 
                 ui->dial_actif = false;
             }
+            else if(evenement.type == SDL_KEYDOWN){
+                if(evenement.key.repeat == 0){
+                    int note = touche_note_clavier(evenement.key.keysym.sym);
+                    if(note != -1){
+                        printf("Touche clavier -> note MIDI %d\n", note);
+                        piano_jouer_test(ui, note);
+                    }
+                }
+            }
+            else if(evenement.type == SDL_KEYUP){
+                if(evenement.key.repeat == 0){
+                    int note = touche_note_clavier(evenement.key.keysym.sym);
+                    if(note != -1){
+                        piano_relacher_note(ui, note);
+                    }
+                }
+            }
             else if(evenement.type == SDL_MOUSEMOTION){
-                int x = evenement.motion.x;
                 int y = evenement.motion.y;
                 //printf("Souris en mouvement : (%d, %d)\n", x, y);
 
@@ -445,23 +521,45 @@ void interface_boucle(interface_t *ui){
         dessiner_texte(ui->rendu, ui->police, "S", 543, 260);
         dessiner_texte(ui->rendu, ui->police, "R", 603, 260);
 
-        piano_dessiner(ui->rendu);
+        piano_dessiner(ui, ui->rendu);
 
         SDL_RenderPresent(ui->rendu);
 
-        SDL_Delay(16);
+        SDL_Delay(8);
     }
 }
 
-static void piano_dessiner(SDL_Renderer *rendu)
+static int touche_note_clavier(SDL_Keycode touche)
+{
+    switch (touche) {
+        case SDLK_a: return 60; /* C4 */
+        case SDLK_w: return 61; /* C#4 */
+        case SDLK_s: return 62; /* D4 */
+        case SDLK_e: return 63; /* D#4 */
+        case SDLK_d: return 64; /* E4 */
+        case SDLK_f: return 65; /* F4 */
+        case SDLK_t: return 66; /* F#4 */
+        case SDLK_g: return 67; /* G4 */
+        case SDLK_y: return 68; /* G#4 */
+        case SDLK_h: return 69; /* A4 */
+        case SDLK_u: return 70; /* A#4 */
+        case SDLK_j: return 71; /* B4 */
+        case SDLK_k: return 72; /* C5 */
+        case SDLK_o: return 73; /* C#5 */
+        case SDLK_l: return 74; /* D5 */
+        default: return -1;
+    }
+}
+
+static void piano_dessiner(interface_t *ui, SDL_Renderer *rendu)
 {
     int largeur_blanche = PIANO_LARGEUR / NB_TOUCHES_BLANCHES;
     int largeur_noire = 38;
     int hauteur_noire = 110;
 
-    /* Dessiner les touches blanches */
     for (int i = 0; i < NB_TOUCHES_BLANCHES; i++)
     {
+        int note = notes_blanches[i];
         SDL_Rect touche = {
             PIANO_X + i * largeur_blanche,
             PIANO_Y,
@@ -469,16 +567,20 @@ static void piano_dessiner(SDL_Renderer *rendu)
             PIANO_HAUTEUR
         };
 
-        SDL_SetRenderDrawColor(rendu, 245, 245, 245, 255);
+        if (ui != NULL && ui->note_active[note]) {
+            SDL_SetRenderDrawColor(rendu, 170, 170, 170, 255);
+        } else {
+            SDL_SetRenderDrawColor(rendu, 245, 245, 245, 255);
+        }
         SDL_RenderFillRect(rendu, &touche);
 
         SDL_SetRenderDrawColor(rendu, 20, 20, 20, 255);
         SDL_RenderDrawRect(rendu, &touche);
     }
 
-    /* Dessiner les touches noires par-dessus les blanches */
     for (int i = 0; i < 10; i++)
     {
+        int note = notes_noires[i];
         SDL_Rect touche = {
             PIANO_X
                 + (position_noires[i] + 1) * largeur_blanche
@@ -488,7 +590,11 @@ static void piano_dessiner(SDL_Renderer *rendu)
             hauteur_noire
         };
 
-        SDL_SetRenderDrawColor(rendu, 25, 25, 25, 255);
+        if (ui != NULL && ui->note_active[note]) {
+            SDL_SetRenderDrawColor(rendu, 110, 110, 110, 255);
+        } else {
+            SDL_SetRenderDrawColor(rendu, 25, 25, 25, 255);
+        }
         SDL_RenderFillRect(rendu, &touche);
     }
 }
@@ -537,54 +643,82 @@ static int piano_note_clique(int x, int y)
 }
 
 
-static void piano_jouer_test(interface_t *ui, int note_midi)
+static voix_t *voice_disponible(interface_t *ui)
 {
-    const float duree_note = 0.300f;
-
-    // Calcul de la frequence de la note MIDI
-    float frequence = 440.0f * powf(2.0f, (note_midi - 69) / 12.0f);
-
-    // Mise a jour de la frequence de l'oscillateur
-    oscillateur_set_frequence(ui->osc, frequence);
-
-    // Calcul du nombre d'echantillons necessaires
-    int nb_echantillons = enveloppe_duree_totale(ui->env, duree_note);
-
-    if (nb_echantillons <= 0) {
-        return;
+    for (int i = 0; i < MAX_VOIX; ++i) {
+        if (!ui->voix[i].active) {
+            return &ui->voix[i];
+        }
     }
 
-    // Allocation du tampon audio
-    float *buffer = malloc((size_t)nb_echantillons * sizeof(float));
-
-    if (buffer == NULL) {
-        return;
+    int oldest = 0;
+    float oldest_time = ui->voix[0].temps;
+    for (int i = 1; i < MAX_VOIX; ++i) {
+        if (ui->voix[i].temps > oldest_time) {
+            oldest_time = ui->voix[i].temps;
+            oldest = i;
+        }
     }
-
-    // 1. Generation de la forme d'onde
-    oscillateur_generer(ui->osc, buffer, nb_echantillons);
-
-    // 2. Application du filtre
-    filtre_appliquer(ui->flt, buffer, nb_echantillons);
-
-    // 3. Application de l'enveloppe ADSR
-    enveloppe_appliquer(ui->env, buffer, nb_echantillons, duree_note);
-
-    // 4. Envoi du son vers SDL
-    SDL_ClearQueuedAudio(ui->audio);
-
-    SDL_QueueAudio(
-        ui->audio,
-        buffer,
-        (Uint32)(nb_echantillons * sizeof(float))
-    );
-
-    SDL_PauseAudioDevice(ui->audio, 0);
-
-    // Liberation du tampon
-    free(buffer);
+    return &ui->voix[oldest];
 }
 
+static void piano_jouer_test(interface_t *ui, int note_midi)
+{
+    if (ui == NULL || note_midi < 0 || note_midi >= 128) {
+        return;
+    }
+
+    ui->note_active[note_midi] = true;
+}
+
+static void piano_relacher_note(interface_t *ui, int note_midi)
+{
+    if (ui == NULL || note_midi < 0 || note_midi >= 128) {
+        return;
+    }
+
+    ui->note_active[note_midi] = false;
+
+    for (int i = 0; i < MAX_VOIX; ++i) {
+        if (ui->voix[i].active && ui->voix[i].note_midi == note_midi) {
+            ui->voix[i].released = true;
+            ui->voix[i].temps_release = ui->voix[i].temps;
+            break;
+        }
+    }
+}
+
+static void voice_ajouter_note(interface_t *ui, int note_midi)
+{
+    if (ui == NULL || note_midi < 0 || note_midi >= 128) {
+        return;
+    }
+
+    for (int i = 0; i < MAX_VOIX; ++i) {
+        if (ui->voix[i].active && ui->voix[i].note_midi == note_midi) {
+            return;
+        }
+    }
+
+    voix_t *v = voice_disponible(ui);
+    if (v == NULL) {
+        return;
+    }
+
+    const float duree_note = 0.300f;
+    float frequence = 440.0f * powf(2.0f, (note_midi - 69) / 12.0f);
+
+    v->note_midi = note_midi;
+    v->frequence_hz = frequence;
+    v->duree_note_s = duree_note;
+    v->temps = 0.0f;
+    v->temps_release = 0.0f;
+    v->released = false;
+    v->active = true;
+    oscillateur_set_type(v->osc, ui->onde_selectionnee);
+    oscillateur_set_frequence(v->osc, frequence);
+    oscillateur_reset_phase(v->osc);
+}
 
 static void dessiner_icone_sinus(SDL_Renderer *rendu, SDL_Rect zone)
 {
@@ -831,4 +965,105 @@ static void dessiner_dial(SDL_Renderer *rendu, int centre_x, int centre_y, int r
 
     /* Petit cercle orange au centre */
     dessiner_cercle_rempli(rendu, centre_x, centre_y, 4);
+}
+
+static float clamp_audio_sample(float value, float min_value, float max_value)
+{
+    if (value < min_value) return min_value;
+    if (value > max_value) return max_value;
+    return value;
+}
+
+static void audio_callback(void *userdata, Uint8 *stream, int len)
+{
+    interface_t *ui = (interface_t *)userdata;
+    if (ui == NULL || stream == NULL || len <= 0) {
+        return;
+    }
+
+    float *buffer = (float *)stream;
+    int nb_echantillons = len / (int)sizeof(float);
+    const float taux = (float)ui->audio_spec.freq;
+    const float attack_s = enveloppe_attack(ui->env);
+    const float decay_s = enveloppe_decay(ui->env);
+    const float sustain = enveloppe_sustain(ui->env);
+    const float release_s = enveloppe_release(ui->env);
+    const float voix_gain = 0.28f;
+    const float max_output = 0.85f;
+
+    memset(buffer, 0, (size_t)len);
+
+    for (int note = 0; note < 128; ++note) {
+        if (ui->note_active[note]) {
+            voice_ajouter_note(ui, note);
+        }
+    }
+
+    for (int v = 0; v < MAX_VOIX; ++v) {
+        if (!ui->voix[v].active) {
+            continue;
+        }
+
+        oscillateur_set_type(ui->voix[v].osc, ui->onde_selectionnee);
+        oscillateur_set_frequence(ui->voix[v].osc, ui->voix[v].frequence_hz);
+
+        if (ui->voix[v].note_midi >= 0 && ui->voix[v].note_midi < 128 && !ui->note_active[ui->voix[v].note_midi] && !ui->voix[v].released) {
+            ui->voix[v].released = true;
+            ui->voix[v].temps_release = ui->voix[v].temps;
+        }
+
+        float *voice_buffer = ui->temp_voice_buffer;
+        oscillateur_generer(ui->voix[v].osc, voice_buffer, nb_echantillons);
+
+        for (int i = 0; i < nb_echantillons; ++i) {
+            float temps = ui->voix[v].temps + (float)i / taux;
+            float amplitude = 0.0f;
+
+            if (!ui->voix[v].released) {
+                if (attack_s > 0.0f && temps < attack_s) {
+                    amplitude = temps / attack_s;
+                } else if (temps < attack_s + decay_s) {
+                    if (decay_s > 0.0f) {
+                        amplitude = 1.0f - ((temps - attack_s) / decay_s) * (1.0f - sustain);
+                    } else {
+                        amplitude = sustain;
+                    }
+                } else {
+                    amplitude = sustain;
+                }
+            } else {
+                float release_elapsed = temps - ui->voix[v].temps_release;
+                if (release_s > 0.0f) {
+                    amplitude = sustain * (1.0f - (release_elapsed / release_s));
+                }
+            }
+
+            amplitude = clamp_audio_sample(amplitude, 0.0f, 1.0f);
+            float sample = voice_buffer[i] * amplitude * voix_gain;
+            buffer[i] = clamp_audio_sample(buffer[i] + sample, -max_output, max_output);
+        }
+
+        ui->voix[v].temps += (float)nb_echantillons / taux;
+
+        if (ui->voix[v].released) {
+            float release_elapsed = ui->voix[v].temps - ui->voix[v].temps_release;
+            if (release_s <= 0.0f || release_elapsed >= release_s) {
+                ui->voix[v].active = false;
+                if (ui->voix[v].note_midi >= 0 && ui->voix[v].note_midi < 128) {
+                    ui->note_active[ui->voix[v].note_midi] = false;
+                }
+                ui->voix[v].note_midi = -1;
+                ui->voix[v].released = false;
+                ui->voix[v].temps_release = 0.0f;
+            }
+        }
+    }
+
+    for (int i = 0; i < nb_echantillons; ++i) {
+        buffer[i] = clamp_audio_sample(buffer[i], -max_output, max_output);
+    }
+
+    if (ui->flt != NULL) {
+        filtre_appliquer(ui->flt, buffer, nb_echantillons);
+    }
 }
