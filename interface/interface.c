@@ -14,7 +14,7 @@
 #include "../enveloppe/enveloppe.h"
 
 #define PIANO_X 50
-#define PIANO_Y 350
+#define PIANO_Y 420
 #define PIANO_LARGEUR 900
 #define PIANO_HAUTEUR 180
 #define NB_TOUCHES_BLANCHES 14
@@ -81,6 +81,8 @@ struct interface
     float temp_voice_buffer[2048];
     bool note_active[128];
     voix_t voix[MAX_VOIX];
+
+    bool fullscreen;
 };
 
 static void audio_callback(void *userdata, Uint8 *stream, int len);
@@ -99,6 +101,7 @@ static void dessiner_slider_vertical(SDL_Renderer *rendu, int x, int y, int haut
 static void dessiner_texte(SDL_Renderer *rendu, TTF_Font *police, const char *texte, int x, int y);
 static void dessiner_cercle_rempli(SDL_Renderer *rendu, int cx, int cy, int rayon);
 static void dessiner_dial(SDL_Renderer *rendu, int centre_x, int centre_y, int rayon, float valeur);
+void dessiner_courbe_adsr(SDL_Renderer *rendu, SDL_Rect zone, float attack, float decay, float sustain, float release);
 
 enum {
     SLIDER_ATTACK,
@@ -196,6 +199,14 @@ interface_t *interface_creer(oscillateur_t *osc, filtre_t *flt, enveloppe_t *env
         return NULL;
     }
 
+    // Garder un systeme de coordonnees logique de 1000 x 600
+    if (SDL_RenderSetLogicalSize(ui->rendu, 1000, 600) != 0) {
+        interface_detruire(ui);
+        return NULL;
+    }
+
+    ui->fullscreen = false;
+
     // AUDIO
     SDL_AudioSpec spec;
     SDL_zero(spec);
@@ -203,7 +214,7 @@ interface_t *interface_creer(oscillateur_t *osc, filtre_t *flt, enveloppe_t *env
     spec.freq = 44100;
     spec.format = AUDIO_F32SYS;
     spec.channels = 1;
-    spec.samples = 128;
+    spec.samples = 512;
     spec.callback = audio_callback;
     spec.userdata = ui;
 
@@ -243,19 +254,21 @@ void interface_boucle(interface_t *ui){
 
     bool continuer = true;
 
-    SDL_Rect zone_oscillateur   = {50, 50, 300, 250};
-    SDL_Rect zone_adsr          = {400, 50, 250, 250};
-    SDL_Rect zone_filtre        = {700, 50, 250, 250};
+    SDL_Rect zone_oscillateur   = {50, 50, 300, 325};
+    SDL_Rect zone_adsr          = {380, 50, 270, 325};
+    SDL_Rect zone_filtre        = {680, 50, 270, 250};
 
-    SDL_Rect zone_sine          = {70, 100, 60, 60};
-    SDL_Rect zone_square        = {140, 100, 60, 60};
-    SDL_Rect zone_tri           = {210, 100, 60, 60};
-    SDL_Rect zone_saw           = {280, 100, 60, 60};
+    SDL_Rect zone_sine          = {70, 270, 60, 60};
+    SDL_Rect zone_square        = {140, 270, 60, 60};
+    SDL_Rect zone_tri           = {210, 270, 60, 60};
+    SDL_Rect zone_saw           = {280, 270, 60, 60};
 
-    SDL_Rect icone_sine          = {80, 110, 40, 40};
-    SDL_Rect icone_square        = {150, 110, 40, 40};
-    SDL_Rect icone_tri           = {220, 110, 40, 40};
-    SDL_Rect icone_saw           = {290, 110, 40, 40};
+    SDL_Rect icone_sine          = {80, 280, 40, 40};
+    SDL_Rect icone_square        = {150, 280, 40, 40};
+    SDL_Rect icone_tri           = {220, 280, 40, 40};
+    SDL_Rect icone_saw           = {290, 280, 40, 40};
+
+    SDL_Rect zone_graph          = {400, 100, 240, 90};
 
     int note_clique_active = -1;
 
@@ -302,12 +315,12 @@ void interface_boucle(interface_t *ui){
 
                 int note = piano_note_clique(x,y);
                 if(note != -1) {
-                    printf("Note MIDI jouee : %d\n", note);
+                    //printf("Note MIDI jouee : %d\n", note);
                     note_clique_active = note;
                     piano_jouer_test(ui, note);
                 }
 
-                if (y >= 60 && y <= 240)
+                if (y >= 100 && y <= 330)
                 {
                     if (x >= 415 && x <= 445)
                         ui->slider_actif = SLIDER_ATTACK;
@@ -324,7 +337,7 @@ void interface_boucle(interface_t *ui){
 
                 // Selection du dial
                 if (x >= 770 && x <= 880 &&
-                    y >= 90 && y <= 200) {
+                    y >= 115 && y <= 225) {
                     ui->dial_actif = true;
                 }
 
@@ -345,9 +358,25 @@ void interface_boucle(interface_t *ui){
             }
             else if(evenement.type == SDL_KEYDOWN){
                 if(evenement.key.repeat == 0){
+                    if (evenement.key.keysym.sym == SDLK_F11)
+                    {
+                        ui->fullscreen = !ui->fullscreen;
+
+                        if (ui->fullscreen)
+                        {
+                            SDL_SetWindowFullscreen(
+                                ui->fenetre,
+                                SDL_WINDOW_FULLSCREEN_DESKTOP
+                            );
+                        }
+                        else
+                        {
+                            SDL_SetWindowFullscreen(ui->fenetre, 0);
+                        }
+                    }
                     int note = touche_note_clavier(evenement.key.keysym.sym);
                     if(note != -1){
-                        printf("Touche clavier -> note MIDI %d\n", note);
+                        //printf("Touche clavier -> note MIDI %d\n", note);
                         piano_jouer_test(ui, note);
                     }
                 }
@@ -365,7 +394,7 @@ void interface_boucle(interface_t *ui){
                 //printf("Souris en mouvement : (%d, %d)\n", x, y);
 
                 if(ui->slider_actif != -1){
-                    float ratio = 1.0f - (float)(y - 70) / 150.0f;
+                    float ratio = 1.0f - (float)(y - 200) / 125.0f;
 
                     if (ratio < 0.0f) ratio = 0.0f;
                     if (ratio > 1.0f) ratio = 1.0f;
@@ -398,18 +427,43 @@ void interface_boucle(interface_t *ui){
                     }
                 }
 
-                if (ui->dial_actif) {
+                if (ui->dial_actif)
+                {
+                    // Centre du dial
+                    float centre_x = 825.0f;
+                    float centre_y = 170.0f;
 
-                    float ratio = 1.0f - (float)(y - 90) / 110.0f;
+                    // Position de la souris par rapport au centre
+                    float dx = evenement.motion.x - centre_x;
+                    float dy = evenement.motion.y - centre_y;
 
-                    if (ratio < 0.0f) ratio = 0.0f;
-                    if (ratio > 1.0f) ratio = 1.0f;
+                    // Calcul de l'angle en degrés
+                    float angle = atan2f(dy, dx) * 180.0f / (float)M_PI;
 
-                    // Frequence entre 100 Hz et 10 000 Hz
-                    ui->frequence_coupure_hz = 100.0f * powf(100.0f, ratio);
+                    // Convertir l'angle entre 0 et 360 degrés
+                    if (angle < 0.0f)
+                        angle += 360.0f;
 
-                    // Mettre a jour le filtre
+                    // Le dial commence à 135 degrés
+                    if (angle < 135.0f)
+                        angle += 360.0f;
+
+                    // Limiter l'angle entre 135 et 405 degrés
+                    if (angle < 135.0f)
+                        angle = 135.0f;
+
+                    if (angle > 405.0f)
+                        angle = 405.0f;
+
+                    // Convertir l'angle en ratio entre 0 et 1
+                    float ratio = (angle - 135.0f) / 270.0f;
+
+                    // Convertir le ratio en fréquence logarithmique
+                    ui->frequence_coupure_hz = 500.0f * powf(20.0f, ratio);
+
+                    // Mettre à jour le filtre
                     filtre_set_coupure(ui->flt, ui->frequence_coupure_hz);
+                    printf("Frequence du filtre : %.2f Hz\n", ui->frequence_coupure_hz);
                 }
             }
         }
@@ -429,7 +483,7 @@ void interface_boucle(interface_t *ui){
             SDL_RenderFillRect(ui->rendu, &zone_sine);
             SDL_RenderFillRect(ui->rendu, &icone_sine);
             dessiner_icone_sinus(ui->rendu, icone_sine);
-            dessiner_texte(ui->rendu, ui->police, "SINE", 75, 170);
+            dessiner_texte(ui->rendu, ui->police, "SINE", 75, 340);
         }
         else {
             SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
@@ -437,7 +491,7 @@ void interface_boucle(interface_t *ui){
             SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
             SDL_RenderFillRect(ui->rendu, &icone_sine);
             dessiner_icone_sinus(ui->rendu, icone_sine);
-            dessiner_texte(ui->rendu, ui->police, "SINE", 75, 170);
+            dessiner_texte(ui->rendu, ui->police, "SINE", 75, 340);
         }
         
 
@@ -447,7 +501,7 @@ void interface_boucle(interface_t *ui){
             SDL_RenderFillRect(ui->rendu, &zone_square);
             SDL_RenderFillRect(ui->rendu, &icone_square);
             dessiner_icone_square(ui->rendu, icone_square);
-            dessiner_texte(ui->rendu, ui->police, "SQUARE", 130, 170);
+            dessiner_texte(ui->rendu, ui->police, "SQUARE", 130, 340);
         }
         else{
             SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
@@ -455,7 +509,7 @@ void interface_boucle(interface_t *ui){
             SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
             SDL_RenderFillRect(ui->rendu, &icone_square);
             dessiner_icone_square(ui->rendu, icone_square);
-            dessiner_texte(ui->rendu, ui->police, "SQUARE", 130, 170);
+            dessiner_texte(ui->rendu, ui->police, "SQUARE", 130, 340);
         }
         
 
@@ -465,7 +519,7 @@ void interface_boucle(interface_t *ui){
             SDL_RenderFillRect(ui->rendu, &zone_tri);
             SDL_RenderFillRect(ui->rendu, &icone_tri);
             dessiner_icone_triangle(ui->rendu, icone_tri);
-            dessiner_texte(ui->rendu, ui->police, "TRI", 225, 170);
+            dessiner_texte(ui->rendu, ui->police, "TRI", 225, 340);
         }
         else{
             SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
@@ -473,7 +527,7 @@ void interface_boucle(interface_t *ui){
             SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
             SDL_RenderFillRect(ui->rendu, &icone_tri);
             dessiner_icone_triangle(ui->rendu, icone_tri);
-            dessiner_texte(ui->rendu, ui->police, "TRI", 225, 170);
+            dessiner_texte(ui->rendu, ui->police, "TRI", 225, 340);
         }
         
 
@@ -483,7 +537,7 @@ void interface_boucle(interface_t *ui){
             SDL_RenderFillRect(ui->rendu, &zone_saw);
             SDL_RenderFillRect(ui->rendu, &icone_saw);
             dessiner_icone_saw(ui->rendu, icone_saw);
-            dessiner_texte(ui->rendu, ui->police, "SAW", 290, 170);
+            dessiner_texte(ui->rendu, ui->police, "SAW", 290, 340);
         }
         else{
             SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
@@ -491,35 +545,44 @@ void interface_boucle(interface_t *ui){
             SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
             SDL_RenderFillRect(ui->rendu, &icone_saw);
             dessiner_icone_saw(ui->rendu, icone_saw);
-            dessiner_texte(ui->rendu, ui->police, "SAW", 290, 170);
+            dessiner_texte(ui->rendu, ui->police, "SAW", 290, 340);
         }
 
 
         // Zone Filtre
         SDL_SetRenderDrawColor(ui->rendu, 64, 64, 89, 255);
         SDL_RenderFillRect(ui->rendu, &zone_filtre);
-        dessiner_texte(ui->rendu, ui->police, "FILTRE", 720, 70);
+        dessiner_texte(ui->rendu, ui->police, "FILTRE", 700, 70);
 
         // Dial de fréquence
         dessiner_dial(ui->rendu, 825, 170, 55, ui->frequence_coupure_hz);
         dessiner_texte(ui->rendu, ui->police, "CUTOFF", 790, 240);
         dessiner_texte(ui->rendu, ui->police, "LOW-PASS", 780, 260);
 
+        dessiner_texte(ui->rendu, ui->police, "500", 740, 220);
+        dessiner_texte(ui->rendu, ui->police, "800", 720, 160);
+        dessiner_texte(ui->rendu, ui->police, "1.2k", 740, 100);
+        dessiner_texte(ui->rendu, ui->police, "2k", 810, 80);
+        dessiner_texte(ui->rendu, ui->police, "3.2k", 870, 100);
+        dessiner_texte(ui->rendu, ui->police, "5k", 900, 160);
+        dessiner_texte(ui->rendu, ui->police, "10k", 875, 220);
+
         // Zone ADSR
         SDL_SetRenderDrawColor(ui->rendu, 64, 64, 89, 255);
         SDL_RenderFillRect(ui->rendu, &zone_adsr);
-        dessiner_texte(ui->rendu, ui->police, "ENVELOPPE", 420, 70);
+        dessiner_texte(ui->rendu, ui->police, "ENVELOPPE", 400, 70);
 
         // Draw sliders
-        dessiner_slider_vertical(ui->rendu, 425, 100, 150, ui->attack_ms, 0, 100);
-        dessiner_slider_vertical(ui->rendu, 485, 100, 150, ui->decay_ms, 0, 1000);
-        dessiner_slider_vertical(ui->rendu, 545, 100, 150, ui->sustain, 0, 1);
-        dessiner_slider_vertical(ui->rendu, 605, 100, 150, ui->release_ms, 0, 1000);
-        // ADSR labels
-        dessiner_texte(ui->rendu, ui->police, "A", 422, 260);
-        dessiner_texte(ui->rendu, ui->police, "D", 481, 260);
-        dessiner_texte(ui->rendu, ui->police, "S", 543, 260);
-        dessiner_texte(ui->rendu, ui->police, "R", 603, 260);
+        dessiner_slider_vertical(ui->rendu, 420, 200, 125, ui->attack_ms, 0, 100);
+        dessiner_slider_vertical(ui->rendu, 480, 200, 125, ui->decay_ms, 0, 1000);
+        dessiner_slider_vertical(ui->rendu, 540, 200, 125, ui->sustain, 0, 1);
+        dessiner_slider_vertical(ui->rendu, 600, 200, 125, ui->release_ms, 0, 1000);
+        dessiner_texte(ui->rendu, ui->police, "A", 417, 340);
+        dessiner_texte(ui->rendu, ui->police, "D", 476, 340);
+        dessiner_texte(ui->rendu, ui->police, "S", 538, 340);
+        dessiner_texte(ui->rendu, ui->police, "R", 598, 340);
+
+        dessiner_courbe_adsr(ui->rendu, zone_graph, ui->attack_ms, ui->decay_ms, ui->sustain, ui->release_ms);
 
         piano_dessiner(ui, ui->rendu);
 
@@ -882,7 +945,7 @@ static void dessiner_cercle_rempli(SDL_Renderer *rendu, int cx, int cy, int rayo
 /* Dessiner le dial du filtre */
 static void dessiner_dial(SDL_Renderer *rendu, int centre_x, int centre_y, int rayon, float frequence)
 {
-    const float FREQ_MIN = 100.0f;
+    const float FREQ_MIN = 500.0f;
     const float FREQ_MAX = 10000.0f;
 
     /* Couleurs */
@@ -1004,9 +1067,6 @@ static void audio_callback(void *userdata, Uint8 *stream, int len)
             continue;
         }
 
-        oscillateur_set_type(ui->voix[v].osc, ui->onde_selectionnee);
-        oscillateur_set_frequence(ui->voix[v].osc, ui->voix[v].frequence_hz);
-
         if (ui->voix[v].note_midi >= 0 && ui->voix[v].note_midi < 128 && !ui->note_active[ui->voix[v].note_midi] && !ui->voix[v].released) {
             ui->voix[v].released = true;
             ui->voix[v].temps_release = ui->voix[v].temps;
@@ -1066,4 +1126,60 @@ static void audio_callback(void *userdata, Uint8 *stream, int len)
     if (ui->flt != NULL) {
         filtre_appliquer(ui->flt, buffer, nb_echantillons);
     }
+}
+
+void dessiner_courbe_adsr(SDL_Renderer *rendu,
+                          SDL_Rect zone,
+                          float attack,
+                          float decay,
+                          float sustain,
+                          float release)
+{
+    SDL_SetRenderDrawColor(rendu, 255, 255, 255, 255);
+    SDL_RenderDrawRect(rendu, &zone);
+
+    // Marges du graphique
+    int marge = 15;
+    int x0 = zone.x + marge;
+    int y0 = zone.y + zone.h - marge;
+    int largeur = zone.w - 2 * marge;
+    int hauteur = zone.h - 2 * marge;
+
+    // Axe horizontal et vertical
+    SDL_SetRenderDrawColor(rendu, 180, 180, 180, 255);
+    SDL_RenderDrawLine(rendu, x0, y0 - hauteur, x0, y0);
+    SDL_RenderDrawLine(rendu, x0, y0, x0 + largeur, y0);
+
+    // Normaliser les durées pour calculer la largeur de chaque segment
+    float total = attack + decay + 300.0f + release;
+
+    if (total <= 0.0f)
+        return;
+
+    int largeur_A = (int)(largeur * attack / total);
+    int largeur_D = (int)(largeur * decay / total);
+    int largeur_S = (int)(largeur * 300.0f / total);
+    int largeur_R = largeur - largeur_A - largeur_D - largeur_S;
+
+    // Points de la courbe
+    SDL_Point points[5];
+
+    points[0].x = x0;
+    points[0].y = y0;
+
+    points[1].x = x0 + largeur_A;
+    points[1].y = y0 - hauteur;
+
+    points[2].x = points[1].x + largeur_D;
+    points[2].y = y0 - (int)(hauteur * sustain);
+
+    points[3].x = points[2].x + largeur_S;
+    points[3].y = points[2].y;
+
+    points[4].x = points[3].x + largeur_R;
+    points[4].y = y0;
+
+    // Dessiner la courbe
+    SDL_SetRenderDrawColor(rendu, 0, 220, 120, 255);
+    SDL_RenderDrawLines(rendu, points, 5);
 }
