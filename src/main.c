@@ -70,6 +70,7 @@ int main(void)
     }
 
     printf("Interface du synthetiseur demarree.\n");
+    
 
     /* 5. Lancement de la boucle graphique */
     interface_boucle(ui);
