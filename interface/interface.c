@@ -307,7 +307,7 @@ void interface_boucle(interface_t *ui){
                     piano_jouer_test(ui, note);
                 }
 
-                if (y >= 60 && y <= 230)
+                if (y >= 60 && y <= 240)
                 {
                     if (x >= 415 && x <= 445)
                         ui->slider_actif = SLIDER_ATTACK;
@@ -330,9 +330,9 @@ void interface_boucle(interface_t *ui){
 
             }
             else if(evenement.type == SDL_MOUSEBUTTONUP){
-                int x = evenement.button.x;
-                int y = evenement.button.y;
-                printf("Bouton relache a (%d, %d)\n", x, y);
+                //int x = evenement.button.x;
+                //int y = evenement.button.y;
+                //printf("Bouton relache a (%d, %d)\n", x, y);
 
                 if (note_clique_active != -1) {
                     piano_relacher_note(ui, note_clique_active);
