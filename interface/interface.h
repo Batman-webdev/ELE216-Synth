@@ -41,6 +41,6 @@ void interface_boucle(interface_t *ui);
  * 
  * @param ui 
  */
-static void reseau_traiter(interface_t *ui);
+
 
 #endif

@@ -1,12 +1,8 @@
 NAME    = controle
 CC      = gcc
-CFLAGS  = -Wall -Wextra -std=c11 -g
-INCLUDES = -I ../Unity/unity $(shell pkg-config --cflags sdl2 SDL2_ttf)
-LDLIBS  = -lm $(shell pkg-config --libs sdl2 SDL2_ttf)
-LDFLAGS =
+CFLAGS  = -Wall -Wextra -std=c11 -D_DEFAULT_SOURCE -g
 
-# Définition des liste de fichiers
-SRC = $(NAME).c ../Unity/unity.c
+SRC = $(NAME).c
 OBJ = $(SRC:.c=.o)
 DEP = $(OBJ:.o=.d)
 
@@ -15,13 +11,13 @@ DEP = $(OBJ:.o=.d)
 all: $(NAME)
 
 $(NAME): $(OBJ)
-	$(CC) $(LDFLAGS) $^ -o $@ $(LDLIBS)
+	$(CC) $^ -o $@
 
 %.o: %.c
-	$(CC) $(CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 run: all
-	./$(NAME)
+	./$(NAME) ../partitions/melodie1.txt
 
 clean:
 	rm -f $(OBJ) $(DEP)
