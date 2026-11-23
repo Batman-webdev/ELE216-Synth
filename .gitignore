@@ -60,3 +60,8 @@ build/
 *.exe
 *.wav
 docs/
+src/main
+filtre/filtre_test
+interface/test_interface
+controle/controle
+*.d
