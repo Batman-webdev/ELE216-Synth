@@ -1,4 +1,4 @@
 {
-    "chat.disableAIFeatures": true,
+    "chat.disableAIFeatures": false,
     "C_Cpp.errorSquiggles": "disabled"
 }
