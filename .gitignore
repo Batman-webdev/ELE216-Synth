@@ -53,10 +53,15 @@ dkms.conf
 
 # debug information files
 *.dwo
-
+.vscode/
 .vs/
 build/
 *.o
 *.exe
 *.wav
 docs/
+src/main
+filtre/filtre_test
+interface/test_interface
+controle/controle
+*.d

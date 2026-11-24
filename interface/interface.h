@@ -9,6 +9,7 @@
 #include <SDL2/SDL_video.h>
 #include <SDL2/SDL_ttf.h>
 
+
 typedef struct interface interface_t;
 
 /**
@@ -34,5 +35,12 @@ void interface_detruire(interface_t *ui);
  * @param ui 
  */
 void interface_boucle(interface_t *ui);
+
+/**
+ * @brief traite les événements réseau (connexion, réception de messages).
+ * 
+ * @param ui 
+ */
+
 
 #endif

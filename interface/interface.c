@@ -12,6 +12,11 @@
 #include "../oscillateur/oscillateur.h"
 #include "../filtre/filtre.h"
 #include "../enveloppe/enveloppe.h"
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #define PIANO_X 50
 #define PIANO_Y 420
@@ -64,6 +69,8 @@ static const float palette_teintes[12] = {
     190.0f, 205.0f, 222.0f, 255.0f, 280.0f, 315.0f
 };
 
+static int t_input = 0;
+
 typedef struct {
     bool active;
     bool released;
@@ -108,6 +115,9 @@ struct interface
     float temp_voice_buffer[2048];
     bool note_active[128];
     voix_t voix[MAX_VOIX];
+    int srv_fd, cli_fd;
+    char rx[256];
+    int rx_len;
 
     bool fullscreen;
 
@@ -154,7 +164,8 @@ static float bouton_rotatif_ratio(int centre_x, int centre_y, int souris_x, int 
 #define VOLUME_CX 110
 #define VOLUME_CY 138
 #define VOLUME_RAYON 28
-void dessiner_courbe_adsr(SDL_Renderer *rendu, SDL_Rect zone, float attack, float decay, float sustain, float release);
+static void reseau_traiter(interface_t *ui);
+static void dessiner_courbe_adsr(SDL_Renderer *rendu, SDL_Rect zone, float attack, float decay, float sustain, float release);
 
 enum {
     SLIDER_ATTACK,
@@ -169,6 +180,9 @@ interface_t *interface_creer(oscillateur_t *osc, filtre_t *flt, enveloppe_t *env
     interface_t *ui = malloc(sizeof(interface_t));
     if(ui == NULL) return NULL;
 
+    ui->srv_fd = -1;
+    ui->cli_fd = -1;
+    ui->rx_len = 0;
     ui->fenetre = NULL;
     ui->rendu = NULL;
     ui->audio = 0;
@@ -186,7 +200,7 @@ interface_t *interface_creer(oscillateur_t *osc, filtre_t *flt, enveloppe_t *env
         ui->voix[i].temps = 0.0f;
         ui->voix[i].temps_release = 0.0f;
         ui->voix[i].duree_note_s = 0.300f;
-        ui->voix[i].osc = oscillateur_creer(ONDE_SINE, 440.0f, 0.5f, 44100);
+        ui->voix[i].osc = oscillateur_creer(ONDE_SINE, 440.0f, 0.7f, 44100);
         if (ui->voix[i].osc == NULL) {
             for (int j = 0; j < i; ++j) {
                 oscillateur_detruire(ui->voix[j].osc);
@@ -283,31 +297,54 @@ interface_t *interface_creer(oscillateur_t *osc, filtre_t *flt, enveloppe_t *env
     spec.userdata = ui;
 
     ui->audio = SDL_OpenAudioDevice(NULL, 0, &spec, &ui->audio_spec, 0);
+    printf("audio: %d Hz, %d samples\n", ui->audio_spec.freq, ui->audio_spec.samples);
     if (ui->audio == 0) {
         interface_detruire(ui);
         return NULL;
     }
 
+
     SDL_PauseAudioDevice(ui->audio, 0);
+
+    // SOCKET
+    ui->srv_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (ui->srv_fd >= 0) {
+        int opt = 1;
+        setsockopt(ui->srv_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof opt);
+        struct sockaddr_in a = {0};
+        a.sin_family = AF_INET;
+        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        a.sin_port = htons(5000);
+        if (bind(ui->srv_fd, (struct sockaddr *)&a, sizeof a) != 0 ||
+            listen(ui->srv_fd, 1) != 0) {
+            perror("reseau");
+            close(ui->srv_fd);
+            ui->srv_fd = -1;
+        } else {
+            fcntl(ui->srv_fd, F_SETFL, O_NONBLOCK);
+        }
+    }
 
     return ui;
 
 }
 
-
 void interface_detruire(interface_t *ui){
     if(ui == NULL) return;
+    if(ui->audio != 0) SDL_CloseAudioDevice(ui->audio);
     for (int i = 0; i < MAX_VOIX; ++i) {
         if (ui->voix[i].osc != NULL) {
             oscillateur_detruire(ui->voix[i].osc);
         }
     }
-    if(ui->audio != 0) SDL_CloseAudioDevice(ui->audio);
+    
     if(ui->rendu != NULL) SDL_DestroyRenderer(ui->rendu);
     if(ui->fenetre != NULL) SDL_DestroyWindow(ui->fenetre);
     if (ui->police != NULL) TTF_CloseFont(ui->police);
     if (ui->etat_ttf) TTF_Quit();
     if(ui->etat_sdl) SDL_Quit();
+    if(ui->srv_fd >= 0) close(ui->srv_fd);
+    if(ui->cli_fd >= 0) close(ui->cli_fd);
     free(ui);
 }
 
@@ -339,6 +376,7 @@ void interface_boucle(interface_t *ui){
     int note_clique_active = -1;
 
     while(continuer){
+        reseau_traiter(ui);
         SDL_Event evenement;
 
         while(SDL_PollEvent(&evenement)){
@@ -1004,11 +1042,12 @@ static voix_t *voice_disponible(interface_t *ui)
 
 static void piano_jouer_test(interface_t *ui, int note_midi)
 {
-    if (ui == NULL || note_midi < 0 || note_midi >= 128) {
-        return;
-    }
-
+    if (ui == NULL || note_midi < 0 || note_midi >= 128) return;
+    t_input = SDL_GetTicks();
+    SDL_LockAudioDevice(ui->audio);
     ui->note_active[note_midi] = true;
+    voice_ajouter_note(ui, note_midi);
+    SDL_UnlockAudioDevice(ui->audio);
 
     if (ui->effet_piano == 3) {
         /* Nouveau fondu : on part de la couleur affichee en ce moment */
@@ -1068,19 +1107,17 @@ static void vagues_mettre_a_jour(interface_t *ui, float t)
 
 static void piano_relacher_note(interface_t *ui, int note_midi)
 {
-    if (ui == NULL || note_midi < 0 || note_midi >= 128) {
-        return;
-    }
-
+    if (ui == NULL || note_midi < 0 || note_midi >= 128) return;
+    SDL_LockAudioDevice(ui->audio);
     ui->note_active[note_midi] = false;
-
     for (int i = 0; i < MAX_VOIX; ++i) {
-        if (ui->voix[i].active && ui->voix[i].note_midi == note_midi) {
+        if (ui->voix[i].active && ui->voix[i].note_midi == note_midi && !ui->voix[i].released) {
             ui->voix[i].released = true;
             ui->voix[i].temps_release = ui->voix[i].temps;
             break;
         }
     }
+    SDL_UnlockAudioDevice(ui->audio);
 }
 
 static void voice_ajouter_note(interface_t *ui, int note_midi)
@@ -1090,7 +1127,7 @@ static void voice_ajouter_note(interface_t *ui, int note_midi)
     }
 
     for (int i = 0; i < MAX_VOIX; ++i) {
-        if (ui->voix[i].active && ui->voix[i].note_midi == note_midi) {
+        if (ui->voix[i].active && ui->voix[i].note_midi == note_midi && !ui->voix[i].released) {
             return;
         }
     }
@@ -1227,40 +1264,30 @@ static void dessiner_slider_vertical(SDL_Renderer *rendu, int x, int y, int haut
 
 static void dessiner_texte(SDL_Renderer *rendu, TTF_Font *police, const char *texte, int x, int y)
 {
-    SDL_Color blanc = {255, 255, 255, 255};
+    typedef struct { char txt[32]; SDL_Texture *tex; int w, h; } cache_t;
+    static cache_t cache[64];
+    static int n = 0;
 
-    SDL_Surface *surface = TTF_RenderText_Blended(
-        police,
-        texte,
-        blanc
-    );
+    cache_t *c = NULL;
+    for (int i = 0; i < n; ++i)
+        if (strcmp(cache[i].txt, texte) == 0) { c = &cache[i]; break; }
 
-    if (surface == NULL) {
-        return;
+    if (c == NULL) {
+        if (n >= 64) return;
+        SDL_Color blanc = {255, 255, 255, 255};
+        SDL_Surface *s = TTF_RenderText_Blended(police, texte, blanc);
+        if (s == NULL) return;
+        c = &cache[n++];
+        strncpy(c->txt, texte, sizeof(c->txt) - 1);
+        c->txt[sizeof(c->txt) - 1] = '\0';
+        c->tex = SDL_CreateTextureFromSurface(rendu, s);
+        c->w = s->w; c->h = s->h;
+        SDL_FreeSurface(s);
     }
-
-    SDL_Texture *texture = SDL_CreateTextureFromSurface(
-        rendu,
-        surface
-    );
-
-    if (texture != NULL) {
-
-        SDL_Rect destination = {
-            x,
-            y,
-            surface->w,
-            surface->h
-        };
-
-        SDL_RenderCopy(rendu, texture, NULL, &destination);
-
-        SDL_DestroyTexture(texture);
-    }
-
-    SDL_FreeSurface(surface);
+    if (c->tex == NULL) return;
+    SDL_Rect dst = {x, y, c->w, c->h};
+    SDL_RenderCopy(rendu, c->tex, NULL, &dst);
 }
-
 
 /* Dessiner un cercle rempli */
 static void dessiner_cercle_rempli(SDL_Renderer *rendu, int cx, int cy, int rayon)
@@ -1409,20 +1436,20 @@ static void audio_callback(void *userdata, Uint8 *stream, int len)
 
     float *buffer = (float *)stream;
     int nb_echantillons = len / (int)sizeof(float);
+    if (nb_echantillons > 2048) nb_echantillons = 2048;
+
     const float taux = (float)ui->audio_spec.freq;
     const float attack_s = enveloppe_attack(ui->env);
     const float decay_s = enveloppe_decay(ui->env);
     const float sustain = enveloppe_sustain(ui->env);
     const float release_s = enveloppe_release(ui->env);
-    const float voix_gain = 0.28f;
-    const float max_output = 0.85f;
+    const float voix_gain = 0.4f;
 
     memset(buffer, 0, (size_t)len);
 
-    for (int note = 0; note < 128; ++note) {
-        if (ui->note_active[note]) {
-            voice_ajouter_note(ui, note);
-        }
+    if (t_input != 0) {
+        printf("latence code = %d ms\n", (int)SDL_GetTicks() - t_input);
+        t_input = 0;
     }
 
     for (int v = 0; v < MAX_VOIX; ++v) {
@@ -1430,7 +1457,8 @@ static void audio_callback(void *userdata, Uint8 *stream, int len)
             continue;
         }
 
-        if (ui->voix[v].note_midi >= 0 && ui->voix[v].note_midi < 128 && !ui->note_active[ui->voix[v].note_midi] && !ui->voix[v].released) {
+        if (ui->voix[v].note_midi >= 0 && ui->voix[v].note_midi < 128 &&
+            !ui->note_active[ui->voix[v].note_midi] && !ui->voix[v].released) {
             ui->voix[v].released = true;
             ui->voix[v].temps_release = ui->voix[v].temps;
         }
@@ -1462,8 +1490,7 @@ static void audio_callback(void *userdata, Uint8 *stream, int len)
             }
 
             amplitude = clamp_audio_sample(amplitude, 0.0f, 1.0f);
-            float sample = voice_buffer[i] * amplitude * voix_gain;
-            buffer[i] = clamp_audio_sample(buffer[i] + sample, -max_output, max_output);
+            buffer[i] += voice_buffer[i] * amplitude * voix_gain;
         }
 
         ui->voix[v].temps += (float)nb_echantillons / taux;
@@ -1482,22 +1509,58 @@ static void audio_callback(void *userdata, Uint8 *stream, int len)
         }
     }
 
-    for (int i = 0; i < nb_echantillons; ++i) {
-        buffer[i] = clamp_audio_sample(buffer[i], -max_output, max_output);
-    }
-
     if (ui->flt != NULL) {
         filtre_appliquer(ui->flt, buffer, nb_echantillons);
     }
 
-    /* Volume general */
+    /* Saturation douce puis volume general */
     const float volume = ui->volume;
     for (int i = 0; i < nb_echantillons; ++i) {
-        buffer[i] *= volume;
+        buffer[i] = tanhf(buffer[i]) * volume;
     }
 }
 
-void dessiner_courbe_adsr(SDL_Renderer *rendu,
+static void reseau_traiter(interface_t *ui)
+{
+    if (ui->srv_fd < 0) return;
+
+    if (ui->cli_fd < 0) {
+        ui->cli_fd = accept(ui->srv_fd, NULL, NULL);
+        if (ui->cli_fd >= 0) {
+            fcntl(ui->cli_fd, F_SETFL, O_NONBLOCK);
+            ui->rx_len = 0;
+        }
+        return;
+    }
+
+    if (ui->rx_len >= (int)sizeof ui->rx - 1) ui->rx_len = 0; /* ligne trop longue */
+
+    int n = recv(ui->cli_fd, ui->rx + ui->rx_len,
+                 sizeof ui->rx - ui->rx_len - 1, 0);
+    if (n == 0) {
+        close(ui->cli_fd);
+        ui->cli_fd = -1;
+        ui->rx_len = 0;
+        return;
+    }
+    if (n < 0) return;
+
+    ui->rx_len += n;
+    ui->rx[ui->rx_len] = '\0';
+
+    char *debut = ui->rx, *fin;
+    while ((fin = strchr(debut, '\n')) != NULL) {
+        *fin = '\0';
+        int note;
+        if (sscanf(debut, "ON %d", &note) == 1) piano_jouer_test(ui, note);
+        else if (sscanf(debut, "OFF %d", &note) == 1) piano_relacher_note(ui, note);
+        debut = fin + 1;
+    }
+    ui->rx_len = (int)strlen(debut);
+    memmove(ui->rx, debut, ui->rx_len + 1);
+}
+
+static void dessiner_courbe_adsr(SDL_Renderer *rendu,
                           SDL_Rect zone,
                           float attack,
                           float decay,
