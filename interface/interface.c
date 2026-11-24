@@ -109,6 +109,7 @@ struct interface
     float frequence_coupure_hz;
     bool dial_actif;
 
+    int octave;          /* decalage d'octave, de OCTAVE_MIN a OCTAVE_MAX (0 = normal) */
     float volume;        /* volume general, 0.0 a 1.0 */
     bool volume_actif;   /* bouton de volume en cours de deplacement */
 
@@ -152,6 +153,12 @@ static void dessiner_slider_vertical(SDL_Renderer *rendu, int x, int y, int haut
 static void dessiner_texte(SDL_Renderer *rendu, TTF_Font *police, const char *texte, int x, int y);
 static void dessiner_cercle_rempli(SDL_Renderer *rendu, int cx, int cy, int rayon);
 static void dessiner_texte_centre(SDL_Renderer *rendu, TTF_Font *police, const char *texte, SDL_Rect zone);
+static void dessiner_fleche(SDL_Renderer *rendu, SDL_Rect zone, bool vers_haut, bool actif);
+static void octave_changer(interface_t *ui, int delta);
+
+/* Selecteur d'octave */
+#define OCTAVE_MIN -3
+#define OCTAVE_MAX 3
 static SDL_Rect bouton_effet_rect(int i);
 static void dessiner_panneau_effets(interface_t *ui);
 static SDL_Color hsv_vers_rgb(float h, float s, float v);
@@ -231,6 +238,7 @@ interface_t *interface_creer(oscillateur_t *osc, filtre_t *flt, enveloppe_t *env
 
     ui->volume = 0.8f;
     ui->volume_actif = false;
+    ui->octave = 0;
 
     ui->effet_piano = 1;
     ui->teinte_depart = palette_teintes[0];
@@ -356,7 +364,10 @@ void interface_boucle(interface_t *ui){
     bool continuer = true;
 
     SDL_Rect zone_volume        = {50, 50, 180, 135};
-    SDL_Rect zone_octave        = {245, 50, 105, 135};   /* place reservee pour l'octave */
+    SDL_Rect zone_octave        = {245, 50, 105, 135};
+    SDL_Rect octave_haut        = {272, 98, 50, 24};     /* fleche vers le haut */
+    SDL_Rect octave_valeur      = {245, 124, 105, 26};   /* chiffre de l'octave */
+    SDL_Rect octave_bas         = {272, 152, 50, 24};    /* fleche vers le bas */
     SDL_Rect zone_oscillateur   = {50, 200, 300, 175};
     SDL_Rect zone_adsr          = {380, 50, 270, 325};
     SDL_Rect zone_filtre        = {680, 50, 270, 250};
@@ -448,6 +459,10 @@ void interface_boucle(interface_t *ui){
                         ui->slider_actif = SLIDER_RELEASE;
                 }
 
+                // Fleches d'octave
+                if (SDL_PointInRect(&souris, &octave_haut)) octave_changer(ui, +1);
+                if (SDL_PointInRect(&souris, &octave_bas))  octave_changer(ui, -1);
+
                 // Selection du bouton de volume
                 {
                     int dx = x - VOLUME_CX;
@@ -482,6 +497,10 @@ void interface_boucle(interface_t *ui){
             }
             else if(evenement.type == SDL_KEYDOWN){
                 if(evenement.key.repeat == 0){
+                    // Raccourcis d'octave : Z = descendre, X = monter
+                    if (evenement.key.keysym.sym == SDLK_z) octave_changer(ui, -1);
+                    if (evenement.key.keysym.sym == SDLK_x) octave_changer(ui, +1);
+
                     if (evenement.key.keysym.sym == SDLK_F11)
                     {
                         ui->fullscreen = !ui->fullscreen;
@@ -618,10 +637,17 @@ void interface_boucle(interface_t *ui){
             dessiner_texte(ui->rendu, ui->police, texte_volume, 162, 127);
         }
 
-        // Zone Octave (place reservee, pas encore fonctionnelle)
+        // Zone Octave
         SDL_SetRenderDrawColor(ui->rendu, 64, 64, 89, 255);
         SDL_RenderFillRect(ui->rendu, &zone_octave);
         dessiner_texte(ui->rendu, ui->police, "OCTAVE", 260, 70);
+        dessiner_fleche(ui->rendu, octave_haut, true,  ui->octave < OCTAVE_MAX);
+        dessiner_fleche(ui->rendu, octave_bas,  false, ui->octave > OCTAVE_MIN);
+        {
+            char texte_octave[8];
+            snprintf(texte_octave, sizeof texte_octave, "%+d", ui->octave);   /* +0, +1, -1 ... */
+            dessiner_texte_centre(ui->rendu, ui->police, texte_octave, octave_valeur);
+        }
 
         // Bouton SINE
         if (ui->onde_selectionnee == ONDE_SINE){
@@ -970,6 +996,39 @@ static void dessiner_panneau_effets(interface_t *ui)
     }
 }
 
+/* Change l'octave en restant entre OCTAVE_MIN et OCTAVE_MAX */
+static void octave_changer(interface_t *ui, int delta)
+{
+    int nouvelle = ui->octave + delta;
+    if (nouvelle < OCTAVE_MIN || nouvelle > OCTAVE_MAX) return;
+    ui->octave = nouvelle;
+    printf("Octave : %+d\n", ui->octave);
+}
+
+/*
+ * Bouton fleche : fond sombre et triangle plein.
+ * Le triangle est gris quand on est deja a la limite (actif = false).
+ */
+static void dessiner_fleche(SDL_Renderer *rendu, SDL_Rect zone, bool vers_haut, bool actif)
+{
+    SDL_SetRenderDrawColor(rendu, 30, 30, 35, 255);
+    SDL_RenderFillRect(rendu, &zone);
+
+    if (actif) SDL_SetRenderDrawColor(rendu, 255, 255, 255, 255);
+    else       SDL_SetRenderDrawColor(rendu, 90, 90, 100, 255);
+
+    int cx = zone.x + zone.w / 2;
+    int hauteur = zone.h / 2;                 /* hauteur du triangle */
+    int haut = zone.y + (zone.h - hauteur) / 2;
+
+    /* Triangle rempli ligne par ligne : pointe en haut ou en bas */
+    for (int i = 0; i <= hauteur; ++i) {
+        int demi_largeur = i;                 /* largeur = 2 x hauteur */
+        int y = vers_haut ? haut + i : haut + hauteur - i;
+        SDL_RenderDrawLine(rendu, cx - demi_largeur, y, cx + demi_largeur, y);
+    }
+}
+
 static void dessiner_texte_centre(SDL_Renderer *rendu, TTF_Font *police, const char *texte, SDL_Rect zone)
 {
     int w = 0, h = 0;
@@ -1138,7 +1197,9 @@ static void voice_ajouter_note(interface_t *ui, int note_midi)
     }
 
     const float duree_note = 0.300f;
-    float frequence = 440.0f * powf(2.0f, (note_midi - 69) / 12.0f);
+    /* Le decalage d'octave s'applique au son, pas aux touches affichees */
+    int note_jouee = note_midi + 12 * ui->octave;
+    float frequence = 440.0f * powf(2.0f, (note_jouee - 69) / 12.0f);
 
     v->note_midi = note_midi;
     v->frequence_hz = frequence;
