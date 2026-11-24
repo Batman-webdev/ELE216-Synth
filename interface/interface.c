@@ -40,6 +40,30 @@ static const int position_noires[10] = {
     7, 8, 10, 11, 12
 };
 
+/* Onde de couleur (effet 4) qui part d'une touche vers les deux cotes */
+#define MAX_VAGUES 16
+#define VAGUE_VITESSE 24.0f   /* positions de touche par seconde */
+#define VAGUE_TRAINEE 0.45f   /* duree (s) du fondu de chaque touche apres le passage de l'onde */
+#define FONDU_DUREE   0.60f   /* duree (s) du fondu de couleur de l'effet 3 */
+#define NB_POSITIONS 28       /* 14 blanches + emplacements des noires */
+
+typedef struct {
+    bool active;
+    float origine;   /* position de la touche de depart (0..27) */
+    float t0;        /* instant de depart en secondes */
+    float teinte;    /* couleur de l'onde (degres) */
+} vague_t;
+
+/*
+ * Palette des 12 notes (teinte en degres), de Do a Si.
+ * Teintes choisies a la main plutot qu'un simple pas de 30 degres,
+ * pour eviter les verts/jaunes criards.
+ */
+static const float palette_teintes[12] = {
+    350.0f, 10.0f, 28.0f, 42.0f, 160.0f, 175.0f,
+    190.0f, 205.0f, 222.0f, 255.0f, 280.0f, 315.0f
+};
+
 typedef struct {
     bool active;
     bool released;
@@ -78,12 +102,26 @@ struct interface
     float frequence_coupure_hz;
     bool dial_actif;
 
+    float volume;        /* volume general, 0.0 a 1.0 */
+    bool volume_actif;   /* bouton de volume en cours de deplacement */
+
     float temp_voice_buffer[2048];
     bool note_active[128];
     voix_t voix[MAX_VOIX];
 
     bool fullscreen;
+
+    /* Effet du piano : 1 = normal, 2 a 4 = effets de couleur */
+    int effet_piano;
+    vague_t vagues[MAX_VAGUES];
+
+    /* Effet 3 : fondu de la teinte du piano d'une couleur a l'autre */
+    float teinte_depart;
+    float teinte_cible;
+    float t_changement;
 };
+
+#define NB_EFFETS 4
 
 static void audio_callback(void *userdata, Uint8 *stream, int len);
 static void piano_dessiner(interface_t *ui, SDL_Renderer *rendu);
@@ -91,6 +129,9 @@ static int piano_note_clique(int x, int y);
 static int touche_note_clavier(SDL_Keycode touche);
 static void piano_jouer_test(interface_t *ui, int note_midi);
 static void piano_relacher_note(interface_t *ui, int note_midi);
+static void vague_ajouter(interface_t *ui, int note_midi);
+static void vagues_mettre_a_jour(interface_t *ui, float t);
+static float effet3_teinte(interface_t *ui, float t);
 static void voice_ajouter_note(interface_t *ui, int note_midi);
 static voix_t *voice_disponible(interface_t *ui);
 static void dessiner_icone_sinus(SDL_Renderer *rendu, SDL_Rect zone);
@@ -100,7 +141,19 @@ static void dessiner_icone_saw(SDL_Renderer *rendu, SDL_Rect zone);
 static void dessiner_slider_vertical(SDL_Renderer *rendu, int x, int y, int hauteur, float valeur, float minimum, float maximum);
 static void dessiner_texte(SDL_Renderer *rendu, TTF_Font *police, const char *texte, int x, int y);
 static void dessiner_cercle_rempli(SDL_Renderer *rendu, int cx, int cy, int rayon);
+static void dessiner_texte_centre(SDL_Renderer *rendu, TTF_Font *police, const char *texte, SDL_Rect zone);
+static SDL_Rect bouton_effet_rect(int i);
+static void dessiner_panneau_effets(interface_t *ui);
+static SDL_Color hsv_vers_rgb(float h, float s, float v);
+static SDL_Color piano_couleur_touche(interface_t *ui, int note, int position, bool noire, float t);
 static void dessiner_dial(SDL_Renderer *rendu, int centre_x, int centre_y, int rayon, float valeur);
+static void dessiner_bouton_rotatif(SDL_Renderer *rendu, int centre_x, int centre_y, int rayon, float ratio);
+static float bouton_rotatif_ratio(int centre_x, int centre_y, int souris_x, int souris_y);
+
+/* Bouton de volume */
+#define VOLUME_CX 110
+#define VOLUME_CY 138
+#define VOLUME_RAYON 28
 void dessiner_courbe_adsr(SDL_Renderer *rendu, SDL_Rect zone, float attack, float decay, float sustain, float release);
 
 enum {
@@ -161,6 +214,17 @@ interface_t *interface_creer(oscillateur_t *osc, filtre_t *flt, enveloppe_t *env
 
     ui->frequence_coupure_hz = filtre_coupure(ui->flt);
     ui->dial_actif = false;
+
+    ui->volume = 0.8f;
+    ui->volume_actif = false;
+
+    ui->effet_piano = 1;
+    ui->teinte_depart = palette_teintes[0];
+    ui->teinte_cible = palette_teintes[0];
+    ui->t_changement = -10.0f;
+    for (int i = 0; i < MAX_VAGUES; ++i) {
+        ui->vagues[i].active = false;
+    }
 
     if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0){
         free(ui);
@@ -254,7 +318,9 @@ void interface_boucle(interface_t *ui){
 
     bool continuer = true;
 
-    SDL_Rect zone_oscillateur   = {50, 50, 300, 325};
+    SDL_Rect zone_volume        = {50, 50, 180, 135};
+    SDL_Rect zone_octave        = {245, 50, 105, 135};   /* place reservee pour l'octave */
+    SDL_Rect zone_oscillateur   = {50, 200, 300, 175};
     SDL_Rect zone_adsr          = {380, 50, 270, 325};
     SDL_Rect zone_filtre        = {680, 50, 270, 250};
 
@@ -308,6 +374,15 @@ void interface_boucle(interface_t *ui){
                     }
                 }
                 if(SDL_PointInRect(&souris, &zone_filtre)) printf("Filtre appuye\n");
+
+                // Boutons d'effets du piano
+                for (int i = 0; i < NB_EFFETS; ++i) {
+                    SDL_Rect bouton = bouton_effet_rect(i);
+                    if (SDL_PointInRect(&souris, &bouton)) {
+                        ui->effet_piano = i + 1;
+                        printf("Effet piano : %d\n", ui->effet_piano);
+                    }
+                }
                 if(SDL_PointInRect(&souris, &zone_adsr)){
                     //printf("ASDR appuye\n");
 
@@ -335,6 +410,16 @@ void interface_boucle(interface_t *ui){
                         ui->slider_actif = SLIDER_RELEASE;
                 }
 
+                // Selection du bouton de volume
+                {
+                    int dx = x - VOLUME_CX;
+                    int dy = y - VOLUME_CY;
+                    int r = VOLUME_RAYON + 8;
+                    if (dx * dx + dy * dy <= r * r) {
+                        ui->volume_actif = true;
+                    }
+                }
+
                 // Selection du dial
                 if (x >= 770 && x <= 880 &&
                     y >= 115 && y <= 225) {
@@ -355,6 +440,7 @@ void interface_boucle(interface_t *ui){
                 ui->slider_actif = -1;
 
                 ui->dial_actif = false;
+                ui->volume_actif = false;
             }
             else if(evenement.type == SDL_KEYDOWN){
                 if(evenement.key.repeat == 0){
@@ -427,6 +513,12 @@ void interface_boucle(interface_t *ui){
                     }
                 }
 
+                if (ui->volume_actif)
+                {
+                    ui->volume = bouton_rotatif_ratio(VOLUME_CX, VOLUME_CY,
+                                                      evenement.motion.x, evenement.motion.y);
+                }
+
                 if (ui->dial_actif)
                 {
                     // Centre du dial
@@ -475,7 +567,23 @@ void interface_boucle(interface_t *ui){
         // Zone Oscillateur
         SDL_SetRenderDrawColor(ui->rendu, 64, 64, 89, 255);
         SDL_RenderFillRect(ui->rendu, &zone_oscillateur);
-        dessiner_texte(ui->rendu, ui->police, "OSCILLATEUR", 70, 70);
+        dessiner_texte(ui->rendu, ui->police, "OSCILLATEUR", 70, 215);
+
+        // Zone Volume
+        SDL_SetRenderDrawColor(ui->rendu, 64, 64, 89, 255);
+        SDL_RenderFillRect(ui->rendu, &zone_volume);
+        dessiner_texte(ui->rendu, ui->police, "VOLUME", 70, 70);
+        dessiner_bouton_rotatif(ui->rendu, VOLUME_CX, VOLUME_CY, VOLUME_RAYON, ui->volume);
+        {
+            char texte_volume[8];
+            snprintf(texte_volume, sizeof texte_volume, "%d%%", (int)(ui->volume * 100.0f + 0.5f));
+            dessiner_texte(ui->rendu, ui->police, texte_volume, 162, 127);
+        }
+
+        // Zone Octave (place reservee, pas encore fonctionnelle)
+        SDL_SetRenderDrawColor(ui->rendu, 64, 64, 89, 255);
+        SDL_RenderFillRect(ui->rendu, &zone_octave);
+        dessiner_texte(ui->rendu, ui->police, "OCTAVE", 260, 70);
 
         // Bouton SINE
         if (ui->onde_selectionnee == ONDE_SINE){
@@ -584,6 +692,8 @@ void interface_boucle(interface_t *ui){
 
         dessiner_courbe_adsr(ui->rendu, zone_graph, ui->attack_ms, ui->decay_ms, ui->sustain, ui->release_ms);
 
+        dessiner_panneau_effets(ui);
+
         piano_dessiner(ui, ui->rendu);
 
         SDL_RenderPresent(ui->rendu);
@@ -619,6 +729,8 @@ static void piano_dessiner(interface_t *ui, SDL_Renderer *rendu)
     int largeur_blanche = PIANO_LARGEUR / NB_TOUCHES_BLANCHES;
     int largeur_noire = 38;
     int hauteur_noire = 110;
+    float t = (float)SDL_GetTicks() / 1000.0f;
+    vagues_mettre_a_jour(ui, t);
 
     for (int i = 0; i < NB_TOUCHES_BLANCHES; i++)
     {
@@ -630,11 +742,8 @@ static void piano_dessiner(interface_t *ui, SDL_Renderer *rendu)
             PIANO_HAUTEUR
         };
 
-        if (ui != NULL && ui->note_active[note]) {
-            SDL_SetRenderDrawColor(rendu, 170, 170, 170, 255);
-        } else {
-            SDL_SetRenderDrawColor(rendu, 245, 245, 245, 255);
-        }
+        SDL_Color c = piano_couleur_touche(ui, note, i * 2, false, t);
+        SDL_SetRenderDrawColor(rendu, c.r, c.g, c.b, 255);
         SDL_RenderFillRect(rendu, &touche);
 
         SDL_SetRenderDrawColor(rendu, 20, 20, 20, 255);
@@ -653,13 +762,181 @@ static void piano_dessiner(interface_t *ui, SDL_Renderer *rendu)
             hauteur_noire
         };
 
-        if (ui != NULL && ui->note_active[note]) {
-            SDL_SetRenderDrawColor(rendu, 110, 110, 110, 255);
-        } else {
-            SDL_SetRenderDrawColor(rendu, 25, 25, 25, 255);
-        }
+        SDL_Color c = piano_couleur_touche(ui, note, position_noires[i] * 2 + 1, true, t);
+        SDL_SetRenderDrawColor(rendu, c.r, c.g, c.b, 255);
         SDL_RenderFillRect(rendu, &touche);
     }
+}
+
+/* Conversion HSV -> RGB. h en degres [0, 360), s et v dans [0, 1] */
+static SDL_Color hsv_vers_rgb(float h, float s, float v)
+{
+    h = fmodf(h, 360.0f);
+    if (h < 0.0f) h += 360.0f;
+
+    float c = v * s;
+    float x = c * (1.0f - fabsf(fmodf(h / 60.0f, 2.0f) - 1.0f));
+    float m = v - c;
+    float r = 0.0f, g = 0.0f, b = 0.0f;
+
+    if      (h <  60.0f) { r = c; g = x; }
+    else if (h < 120.0f) { r = x; g = c; }
+    else if (h < 180.0f) { g = c; b = x; }
+    else if (h < 240.0f) { g = x; b = c; }
+    else if (h < 300.0f) { r = x; b = c; }
+    else                 { r = c; b = x; }
+
+    SDL_Color res = {
+        (Uint8)((r + m) * 255.0f),
+        (Uint8)((g + m) * 255.0f),
+        (Uint8)((b + m) * 255.0f),
+        255
+    };
+    return res;
+}
+
+/* Melange lineaire entre deux couleurs (k = 0 -> a, k = 1 -> b) */
+static SDL_Color melanger(SDL_Color a, SDL_Color b, float k)
+{
+    if (k < 0.0f) k = 0.0f;
+    if (k > 1.0f) k = 1.0f;
+    SDL_Color res = {
+        (Uint8)(a.r + (b.r - a.r) * k),
+        (Uint8)(a.g + (b.g - a.g) * k),
+        (Uint8)(a.b + (b.b - a.b) * k),
+        255
+    };
+    return res;
+}
+
+/* Courbe douce 0 -> 1 (debut et fin lents) */
+static float lisser(float x)
+{
+    if (x <= 0.0f) return 0.0f;
+    if (x >= 1.0f) return 1.0f;
+    return x * x * (3.0f - 2.0f * x);
+}
+
+/*
+ * Couleur pleine d'une touche pour une teinte donnee.
+ * Blanche = couleur vive, noire = meme teinte plus foncee.
+ * Une touche enfoncee est legerement plus sombre (blanche) ou plus claire (noire).
+ */
+static SDL_Color couleur_pleine(float teinte, bool noire, bool appuyee)
+{
+    const float SATURATION     = 0.85f;
+    const float V_BLANCHE      = 0.95f;  /* touche blanche au repos */
+    const float V_NOIRE        = 0.42f;  /* touche noire au repos (plus foncee) */
+    const float V_BLANCHE_APP  = 0.72f;  /* touche blanche enfoncee */
+    const float V_NOIRE_APP    = 0.62f;  /* touche noire enfoncee */
+
+    float v;
+    if (noire) v = appuyee ? V_NOIRE_APP : V_NOIRE;
+    else       v = appuyee ? V_BLANCHE_APP : V_BLANCHE;
+    return hsv_vers_rgb(teinte, SATURATION, v);
+}
+
+/* Teinte actuelle de l'effet 3 (fondu de la teinte de depart vers la cible) */
+static float effet3_teinte(interface_t *ui, float t)
+{
+    float k = lisser((t - ui->t_changement) / FONDU_DUREE);
+
+    /* Passer par le chemin le plus court sur le cercle des teintes */
+    float delta = fmodf(ui->teinte_cible - ui->teinte_depart + 540.0f, 360.0f) - 180.0f;
+    float h = fmodf(ui->teinte_depart + delta * k, 360.0f);
+    return (h < 0.0f) ? h + 360.0f : h;
+}
+
+/*
+ * Couleur d'une touche selon l'effet actif.
+ * position : position horizontale de la touche (0..27) pour l'effet d'onde.
+ */
+static SDL_Color piano_couleur_touche(interface_t *ui, int note, int position, bool noire, float t)
+{
+    SDL_Color blanc_repos = {245, 245, 245, 255};
+    SDL_Color noir_repos  = {25, 25, 25, 255};
+    SDL_Color blanc_app   = {170, 170, 170, 255};
+    SDL_Color noir_app    = {110, 110, 110, 255};
+
+    bool appuyee = ui->note_active[note];
+    SDL_Color repos = noire ? noir_repos : blanc_repos;
+
+    switch (ui->effet_piano)
+    {
+        case 2: /* Touches jouees : seule la touche enfoncee prend une couleur pleine */
+            if (!appuyee) return repos;
+            return couleur_pleine(palette_teintes[note % 12], noire, false);
+
+        case 3: /* Couleur : tout le piano change de couleur (en fondu) a chaque note */
+            return couleur_pleine(effet3_teinte(ui, t), noire, appuyee);
+
+        case 4: /* Onde : part de la touche jouee vers la gauche et la droite */
+        {
+            if (appuyee) {
+                return couleur_pleine(palette_teintes[note % 12], noire, false);
+            }
+
+            /* Chaque touche s'allume quand l'onde l'atteint puis s'estompe */
+            float meilleur_k = 0.0f;
+            float teinte = 0.0f;
+            for (int i = 0; i < MAX_VAGUES; ++i) {
+                vague_t *vg = &ui->vagues[i];
+                if (!vg->active) continue;
+                float distance = fabsf((float)position - vg->origine);
+                float depuis = (t - vg->t0) - distance / VAGUE_VITESSE;
+                if (depuis < 0.0f) continue;   /* l'onde n'est pas encore arrivee */
+                float k = 1.0f - depuis / VAGUE_TRAINEE;
+                if (k <= 0.0f) continue;
+                k = k * k;                     /* fondu qui ralentit a la fin */
+                if (k > meilleur_k) {
+                    meilleur_k = k;
+                    teinte = vg->teinte;
+                }
+            }
+            if (meilleur_k <= 0.0f) return repos;
+            return melanger(repos, couleur_pleine(teinte, noire, false), meilleur_k);
+        }
+
+        default: /* 1 : piano classique blanc et noir */
+            if (noire) return appuyee ? noir_app : noir_repos;
+            return appuyee ? blanc_app : blanc_repos;
+    }
+}
+
+/* Position des 4 boutons d'effets dans le panneau */
+static SDL_Rect bouton_effet_rect(int i)
+{
+    SDL_Rect r = {691 + i * 64, 325, 56, 40};
+    return r;
+}
+
+static void dessiner_panneau_effets(interface_t *ui)
+{
+    SDL_Rect zone_effets = {680, 315, 270, 60};
+    SDL_SetRenderDrawColor(ui->rendu, 64, 64, 89, 255);
+    SDL_RenderFillRect(ui->rendu, &zone_effets);
+
+    const char *labels[NB_EFFETS] = {"1", "2", "3", "4"};
+
+    for (int i = 0; i < NB_EFFETS; ++i) {
+        SDL_Rect bouton = bouton_effet_rect(i);
+
+        if (ui->effet_piano == i + 1) {
+            SDL_SetRenderDrawColor(ui->rendu, 50, 150, 255, 255);
+        } else {
+            SDL_SetRenderDrawColor(ui->rendu, 30, 30, 35, 255);
+        }
+        SDL_RenderFillRect(ui->rendu, &bouton);
+
+        dessiner_texte_centre(ui->rendu, ui->police, labels[i], bouton);
+    }
+}
+
+static void dessiner_texte_centre(SDL_Renderer *rendu, TTF_Font *police, const char *texte, SDL_Rect zone)
+{
+    int w = 0, h = 0;
+    if (TTF_SizeText(police, texte, &w, &h) != 0) return;
+    dessiner_texte(rendu, police, texte, zone.x + (zone.w - w) / 2, zone.y + (zone.h - h) / 2);
 }
 
 static int piano_note_clique(int x, int y)
@@ -732,6 +1009,61 @@ static void piano_jouer_test(interface_t *ui, int note_midi)
     }
 
     ui->note_active[note_midi] = true;
+
+    if (ui->effet_piano == 3) {
+        /* Nouveau fondu : on part de la couleur affichee en ce moment */
+        float t = (float)SDL_GetTicks() / 1000.0f;
+        ui->teinte_depart = effet3_teinte(ui, t);
+        ui->teinte_cible = palette_teintes[note_midi % 12];
+        ui->t_changement = t;
+    }
+
+    if (ui->effet_piano == 4) {
+        vague_ajouter(ui, note_midi);
+    }
+}
+
+/* Position horizontale (0..27) d'une note sur le clavier, -1 si hors clavier */
+static int note_position(int note_midi)
+{
+    for (int i = 0; i < NB_TOUCHES_BLANCHES; ++i) {
+        if (notes_blanches[i] == note_midi) return i * 2;
+    }
+    for (int i = 0; i < 10; ++i) {
+        if (notes_noires[i] == note_midi) return position_noires[i] * 2 + 1;
+    }
+    return -1;
+}
+
+/* Lance une onde depuis la touche jouee */
+static void vague_ajouter(interface_t *ui, int note_midi)
+{
+    int position = note_position(note_midi);
+    if (position < 0) return;
+
+    /* Prendre un emplacement libre, sinon remplacer la plus ancienne */
+    int choix = 0;
+    for (int i = 0; i < MAX_VAGUES; ++i) {
+        if (!ui->vagues[i].active) { choix = i; break; }
+        if (ui->vagues[i].t0 < ui->vagues[choix].t0) choix = i;
+    }
+
+    ui->vagues[choix].active = true;
+    ui->vagues[choix].origine = (float)position;
+    ui->vagues[choix].t0 = (float)SDL_GetTicks() / 1000.0f;
+    ui->vagues[choix].teinte = palette_teintes[note_midi % 12];
+}
+
+/* Desactive les ondes qui ont depasse les deux bords du clavier */
+static void vagues_mettre_a_jour(interface_t *ui, float t)
+{
+    for (int i = 0; i < MAX_VAGUES; ++i) {
+        vague_t *vg = &ui->vagues[i];
+        if (!vg->active) continue;
+        float front = (t - vg->t0) * VAGUE_VITESSE;
+        float distance_max = fmaxf(vg->origine, (float)(NB_POSITIONS - 1) - vg->origine);
+        if (front > distance_max + VAGUE_TRAINEE * VAGUE_VITESSE) vg->active = false;
+    }
 }
 
 static void piano_relacher_note(interface_t *ui, int note_midi)
@@ -948,6 +1280,26 @@ static void dessiner_dial(SDL_Renderer *rendu, int centre_x, int centre_y, int r
     const float FREQ_MIN = 500.0f;
     const float FREQ_MAX = 10000.0f;
 
+    /* Limiter la fréquence */
+    if (frequence < FREQ_MIN)
+        frequence = FREQ_MIN;
+
+    if (frequence > FREQ_MAX)
+        frequence = FREQ_MAX;
+
+    /* Convertir la fréquence (echelle logarithmique) en ratio 0..1 */
+    float ratio = logf(frequence / FREQ_MIN) /
+                  logf(FREQ_MAX / FREQ_MIN);
+
+    dessiner_bouton_rotatif(rendu, centre_x, centre_y, rayon, ratio);
+}
+
+/* Dessiner un bouton rotatif (dial) a partir d'un ratio 0..1 */
+static void dessiner_bouton_rotatif(SDL_Renderer *rendu, int centre_x, int centre_y, int rayon, float ratio)
+{
+    if (ratio < 0.0f) ratio = 0.0f;
+    if (ratio > 1.0f) ratio = 1.0f;
+
     /* Couleurs */
     SDL_Color fond = {36, 42, 53, 255};
     SDL_Color contour = {128, 128, 128, 255};
@@ -992,17 +1344,7 @@ static void dessiner_dial(SDL_Renderer *rendu, int centre_x, int centre_y, int r
         SDL_RenderDrawLine(rendu, x1, y1, x2, y2);
     }
 
-    /* Limiter la fréquence */
-    if (frequence < FREQ_MIN)
-        frequence = FREQ_MIN;
-
-    if (frequence > FREQ_MAX)
-        frequence = FREQ_MAX;
-
-    /* Convertir la fréquence en position angulaire */
-    float ratio = logf(frequence / FREQ_MIN) /
-                  logf(FREQ_MAX / FREQ_MIN);
-
+    /* Convertir le ratio en position angulaire */
     float angle = (135.0f + ratio * 270.0f)
                   * (float)M_PI / 180.0f;
 
@@ -1028,6 +1370,27 @@ static void dessiner_dial(SDL_Renderer *rendu, int centre_x, int centre_y, int r
 
     /* Petit cercle orange au centre */
     dessiner_cercle_rempli(rendu, centre_x, centre_y, 4);
+}
+
+/*
+ * Convertit la position de la souris en ratio 0..1 pour un bouton rotatif
+ * qui va de 135 degres (minimum, en bas a gauche) a 405 degres (maximum, en bas a droite).
+ */
+static float bouton_rotatif_ratio(int centre_x, int centre_y, int souris_x, int souris_y)
+{
+    float dx = (float)(souris_x - centre_x);
+    float dy = (float)(souris_y - centre_y);
+    float angle = atan2f(dy, dx) * 180.0f / (float)M_PI;   /* -180..180, 90 = en bas */
+
+    if (angle < 0.0f) angle += 360.0f;                     /* 0..360 */
+
+    /* Zone morte en bas (45..135) : cote gauche = minimum, cote droit = maximum */
+    if (angle > 45.0f && angle < 135.0f) {
+        return (angle >= 90.0f) ? 0.0f : 1.0f;
+    }
+
+    if (angle < 135.0f) angle += 360.0f;                   /* 135..405 */
+    return (angle - 135.0f) / 270.0f;
 }
 
 static float clamp_audio_sample(float value, float min_value, float max_value)
@@ -1125,6 +1488,12 @@ static void audio_callback(void *userdata, Uint8 *stream, int len)
 
     if (ui->flt != NULL) {
         filtre_appliquer(ui->flt, buffer, nb_echantillons);
+    }
+
+    /* Volume general */
+    const float volume = ui->volume;
+    for (int i = 0; i < nb_echantillons; ++i) {
+        buffer[i] *= volume;
     }
 }
 
