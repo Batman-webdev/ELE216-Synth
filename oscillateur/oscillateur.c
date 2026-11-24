@@ -37,6 +37,23 @@ void oscillateur_detruire(oscillateur_t *o)
     free(o);
 }
 
+/*
+ * PolyBLEP : corrige les discontinuites des ondes carree et dent de scie
+ * pour limiter le repliement spectral (aliasing), tres audible dans les aigus.
+ * t = phase dans [0, 1), dt = increment de phase par echantillon.
+ */
+static float poly_blep(float t, float dt)
+{
+    if (t < dt) {
+        t /= dt;
+        return t + t - t * t - 1.0f;
+    } else if (t > 1.0f - dt) {
+        t = (t - 1.0f) / dt;
+        return t * t + t + t + 1.0f;
+    }
+    return 0.0f;
+}
+
 void oscillateur_generer(oscillateur_t *o, float *buffer, int nb_echantillons)
 {
     if (o == NULL || buffer == NULL || nb_echantillons <= 0)
@@ -52,14 +69,20 @@ void oscillateur_generer(oscillateur_t *o, float *buffer, int nb_echantillons)
         case ONDE_SINE:
             valeur = sinf(DEUX_PI * phase);
             break;
-        case ONDE_SQUARE:
+        case ONDE_SQUARE: {
+            float phase2 = phase + 0.5f;
+            if (phase2 >= 1.0f) phase2 -= 1.0f;
             valeur = (phase < 0.5f) ? 1.0f : -1.0f;
+            valeur += poly_blep(phase, increment);
+            valeur -= poly_blep(phase2, increment);
             break;
+        }
         case ONDE_TRI:
             valeur = (phase < 0.5f) ? (4.0f * phase - 1.0f) : (3.0f - 4.0f * phase);
             break;
         case ONDE_SAW:
             valeur = 2.0f * phase - 1.0f;
+            valeur -= poly_blep(phase, increment);
             break;
         }
 

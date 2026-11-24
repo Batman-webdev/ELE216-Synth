@@ -138,12 +138,12 @@ static void audio_callback(void *userdata, Uint8 *stream, int len);
 static void piano_dessiner(interface_t *ui, SDL_Renderer *rendu);
 static int piano_note_clique(int x, int y);
 static int touche_note_clavier(SDL_Keycode touche);
-static void piano_jouer_test(interface_t *ui, int note_midi);
+static void piano_jouer_test(interface_t *ui, int note_midi, int decalage);
 static void piano_relacher_note(interface_t *ui, int note_midi);
 static void vague_ajouter(interface_t *ui, int note_midi);
 static void vagues_mettre_a_jour(interface_t *ui, float t);
 static float effet3_teinte(interface_t *ui, float t);
-static void voice_ajouter_note(interface_t *ui, int note_midi);
+static void voice_ajouter_note(interface_t *ui, int note_midi, int decalage);
 static voix_t *voice_disponible(interface_t *ui);
 static void dessiner_icone_sinus(SDL_Renderer *rendu, SDL_Rect zone);
 static void dessiner_icone_square(SDL_Renderer *rendu, SDL_Rect zone);
@@ -441,7 +441,7 @@ void interface_boucle(interface_t *ui){
                 if(note != -1) {
                     //printf("Note MIDI jouee : %d\n", note);
                     note_clique_active = note;
-                    piano_jouer_test(ui, note);
+                    piano_jouer_test(ui, note, 12 * ui->octave);
                 }
 
                 if (y >= 100 && y <= 330)
@@ -520,7 +520,7 @@ void interface_boucle(interface_t *ui){
                     int note = touche_note_clavier(evenement.key.keysym.sym);
                     if(note != -1){
                         //printf("Touche clavier -> note MIDI %d\n", note);
-                        piano_jouer_test(ui, note);
+                        piano_jouer_test(ui, note, 12 * ui->octave);
                     }
                 }
             }
@@ -1099,13 +1099,13 @@ static voix_t *voice_disponible(interface_t *ui)
     return &ui->voix[oldest];
 }
 
-static void piano_jouer_test(interface_t *ui, int note_midi)
+static void piano_jouer_test(interface_t *ui, int note_midi, int decalage)
 {
     if (ui == NULL || note_midi < 0 || note_midi >= 128) return;
     t_input = SDL_GetTicks();
     SDL_LockAudioDevice(ui->audio);
     ui->note_active[note_midi] = true;
-    voice_ajouter_note(ui, note_midi);
+    voice_ajouter_note(ui, note_midi, decalage);
     SDL_UnlockAudioDevice(ui->audio);
 
     if (ui->effet_piano == 3) {
@@ -1179,7 +1179,7 @@ static void piano_relacher_note(interface_t *ui, int note_midi)
     SDL_UnlockAudioDevice(ui->audio);
 }
 
-static void voice_ajouter_note(interface_t *ui, int note_midi)
+static void voice_ajouter_note(interface_t *ui, int note_midi, int decalage)
 {
     if (ui == NULL || note_midi < 0 || note_midi >= 128) {
         return;
@@ -1197,8 +1197,8 @@ static void voice_ajouter_note(interface_t *ui, int note_midi)
     }
 
     const float duree_note = 0.300f;
-    /* Le decalage d'octave s'applique au son, pas aux touches affichees */
-    int note_jouee = note_midi + 12 * ui->octave;
+    /* Decalage (en demi-tons) applique au son seulement : octave pour le clavier/souris, 0 pour le MIDI */
+    int note_jouee = note_midi + decalage;
     float frequence = 440.0f * powf(2.0f, (note_jouee - 69) / 12.0f);
 
     v->note_midi = note_midi;
@@ -1613,7 +1613,7 @@ static void reseau_traiter(interface_t *ui)
     while ((fin = strchr(debut, '\n')) != NULL) {
         *fin = '\0';
         int note;
-        if (sscanf(debut, "ON %d", &note) == 1) piano_jouer_test(ui, note);
+        if (sscanf(debut, "ON %d", &note) == 1) piano_jouer_test(ui, note, 0);  /* MIDI : pas de decalage d'octave */
         else if (sscanf(debut, "OFF %d", &note) == 1) piano_relacher_note(ui, note);
         debut = fin + 1;
     }

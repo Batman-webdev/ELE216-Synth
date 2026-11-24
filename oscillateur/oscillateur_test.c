@@ -67,22 +67,22 @@ void square_alterne_entre_plus_et_moins_amplitude(void){
     enum { N = 500 };
     const float A = 0.7f;
     float buf[N];
-    int pos = 0, neg = 0;
+    int pos = 0, neg = 0, transitions = 0;
     oscillateur_t *o = oscillateur_creer(ONDE_SQUARE, 440.0f, A, 44100);
 
     oscillateur_generer(o, buf, N);
 
+    /* Avec le PolyBLEP, les echantillons voisins d'un front sont adoucis :
+     * on accepte +/-A exactement, ou une valeur intermediaire (transition). */
     for (int i = 0; i < N; i++){
-        if (buf[i] > 0.0f){
-            TEST_ASSERT_EQUAL_FLOAT(A, buf[i]);
-            pos++;
-        } else {
-            TEST_ASSERT_EQUAL_FLOAT(-A, buf[i]);
-            neg++;
-        }
+        TEST_ASSERT_TRUE(buf[i] <= A + 1e-5f && buf[i] >= -A - 1e-5f);
+        if (fabsf(buf[i] - A) < 1e-5f)      pos++;
+        else if (fabsf(buf[i] + A) < 1e-5f) neg++;
+        else                                 transitions++;
     }
     TEST_ASSERT_TRUE(pos > 0);
     TEST_ASSERT_TRUE(neg > 0);
+    TEST_ASSERT_TRUE(transitions < N / 10);   /* la grande majorite reste a +/-A */
 
     oscillateur_detruire(o);
 }
